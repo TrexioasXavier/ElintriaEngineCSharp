@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/NewFolder1/" />
+  <Project Path="ElintriaEditor/ElintriaEditor.csproj">
+    <BuildDependency Project="ElintriaEngineC/ElintriaEngineC.csproj" />
+  </Project>
+  <Project Path="ElintriaEngine/ElintriaEngine.csproj" Id="a8358aef-702f-4835-aab2-cc83025b026c" />
+  <Project Path="ElintriaEngineC/ElintriaEngineC.csproj" />
+</Solution>

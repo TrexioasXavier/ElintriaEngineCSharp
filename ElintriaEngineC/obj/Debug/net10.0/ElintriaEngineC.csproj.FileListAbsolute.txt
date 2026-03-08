@@ -1,0 +1,13 @@
+C:\Users\trexi\Desktop\Editors\Visual Studio\Projects\ElintriaEngineC\ElintriaEngineC\bin\Debug\net10.0\ElintriaEngineC.deps.json
+C:\Users\trexi\Desktop\Editors\Visual Studio\Projects\ElintriaEngineC\ElintriaEngineC\bin\Debug\net10.0\ElintriaEngineC.dll
+C:\Users\trexi\Desktop\Editors\Visual Studio\Projects\ElintriaEngineC\ElintriaEngineC\bin\Debug\net10.0\ElintriaEngineC.pdb
+C:\Users\trexi\Desktop\Editors\Visual Studio\Projects\ElintriaEngineC\ElintriaEngineC\obj\Debug\net10.0\ElintriaEngineC.csproj.AssemblyReference.cache
+C:\Users\trexi\Desktop\Editors\Visual Studio\Projects\ElintriaEngineC\ElintriaEngineC\obj\Debug\net10.0\ElintriaEngineC.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\trexi\Desktop\Editors\Visual Studio\Projects\ElintriaEngineC\ElintriaEngineC\obj\Debug\net10.0\ElintriaEngineC.AssemblyInfoInputs.cache
+C:\Users\trexi\Desktop\Editors\Visual Studio\Projects\ElintriaEngineC\ElintriaEngineC\obj\Debug\net10.0\ElintriaEngineC.AssemblyInfo.cs
+C:\Users\trexi\Desktop\Editors\Visual Studio\Projects\ElintriaEngineC\ElintriaEngineC\obj\Debug\net10.0\ElintriaEngineC.csproj.CoreCompileInputs.cache
+C:\Users\trexi\Desktop\Editors\Visual Studio\Projects\ElintriaEngineC\ElintriaEngineC\obj\Debug\net10.0\ElintriaEngineC.sourcelink.json
+C:\Users\trexi\Desktop\Editors\Visual Studio\Projects\ElintriaEngineC\ElintriaEngineC\obj\Debug\net10.0\ElintriaEngineC.dll
+C:\Users\trexi\Desktop\Editors\Visual Studio\Projects\ElintriaEngineC\ElintriaEngineC\obj\Debug\net10.0\refint\ElintriaEngineC.dll
+C:\Users\trexi\Desktop\Editors\Visual Studio\Projects\ElintriaEngineC\ElintriaEngineC\obj\Debug\net10.0\ElintriaEngineC.pdb
+C:\Users\trexi\Desktop\Editors\Visual Studio\Projects\ElintriaEngineC\ElintriaEngineC\obj\Debug\net10.0\ref\ElintriaEngineC.dll

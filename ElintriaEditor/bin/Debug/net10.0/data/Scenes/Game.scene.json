@@ -1,0 +1,123 @@
+{
+  "name": "Game",
+  "gameObjects": [
+    {
+      "id": 1,
+      "name": "Ground",
+      "active": true,
+      "tag": "Untagged",
+      "parentId": 0,
+      "transform": {
+        "localPosition": [
+          0,
+          -0.01,
+          0
+        ],
+        "localRotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "localScale": [
+          10,
+          1,
+          10
+        ]
+      },
+      "components": [
+        {
+          "type": "Elintria.Engine.MeshRenderer",
+          "enabled": true,
+          "fields": {
+            "Mesh": "Elintria.Engine.Rendering.Mesh",
+            "Material": "Elintria.Engine.Rendering.Material",
+            "CastShadows": "True",
+            "ReceiveShadows": "True"
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Cube",
+      "active": true,
+      "tag": "Untagged",
+      "parentId": 0,
+      "transform": {
+        "localPosition": [
+          2,
+          0.5,
+          0
+        ],
+        "localRotation": [
+          0.707343,
+          -4.0421088E-05,
+          0.7068705,
+          -4.0394087E-05
+        ],
+        "localScale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": [
+        {
+          "type": "Elintria.Engine.MeshRenderer",
+          "enabled": true,
+          "fields": {
+            "Mesh": "Elintria.Engine.Rendering.Mesh",
+            "Material": "Elintria.Engine.Rendering.Material",
+            "CastShadows": "True",
+            "ReceiveShadows": "True"
+          }
+        },
+        {
+          "type": "Elintria.Spinner",
+          "enabled": true,
+          "fields": {
+            "SpeedDegrees": "45"
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Sphere",
+      "active": true,
+      "tag": "Untagged",
+      "parentId": 0,
+      "transform": {
+        "localPosition": [
+          -2,
+          0.5,
+          0
+        ],
+        "localRotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "localScale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": [
+        {
+          "type": "Elintria.Engine.MeshRenderer",
+          "enabled": true,
+          "fields": {
+            "Mesh": "Elintria.Engine.Rendering.Mesh",
+            "Material": "Elintria.Engine.Rendering.Material",
+            "CastShadows": "True",
+            "ReceiveShadows": "True"
+          }
+        }
+      ]
+    }
+  ]
+}
