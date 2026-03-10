@@ -35,12 +35,15 @@ namespace ElintriaEngine.UI
         private Core.Scene? _savedScene = null;  // editor snapshot, restored on Stop
         private Core.SceneRunner _runner = new();
         private Build.ScriptWatcher? _watcher;
-        private volatile bool _scriptsDirty = true;   // starts dirty until first compile
+        private volatile bool _scriptsDirty = true;
         private volatile bool _scriptsCompiling = false;
-        private volatile bool _pendingScriptRefresh = false;  // set on bg thread, read on main
+        private volatile bool _pendingScriptRefresh = false;
         private PointF _mouse;
         private string _projectRoot = "";
         private int _winW, _winH;
+
+        /// <summary>Fired when the user clicks File → Return to Launcher.</summary>
+        public event Action? ReturnToLauncher;
 
         private const float MenuH = 24f;
         private const float HierW = 220f;
@@ -137,6 +140,7 @@ namespace ElintriaEngine.UI
             MenuBar.SaveScene += SaveScene;
             MenuBar.OpenScene += OpenScene;
             MenuBar.Exit += () => System.Environment.Exit(0);
+            MenuBar.ReturnToLauncher += () => ReturnToLauncher?.Invoke();
             MenuBar.BuildOnly += () => { BuildSettings.IsVisible = true; BuildSettings.StartBuild(false); };
             MenuBar.BuildAndRun += () => { BuildSettings.IsVisible = true; BuildSettings.StartBuild(true); };
             MenuBar.OpenBuildSettings += () => BuildSettings.IsVisible = !BuildSettings.IsVisible;

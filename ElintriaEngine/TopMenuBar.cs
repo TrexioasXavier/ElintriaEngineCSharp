@@ -39,7 +39,7 @@ namespace ElintriaEngine.UI.Panels
         /// <summary>Set by EditorLayout to show a warning dot when compile failed.</summary>
         public bool IsScriptsDirty { get; set; }
 
-        public Action? NewScene, OpenScene, SaveScene, SaveSceneAs, Exit;
+        public Action? NewScene, OpenScene, SaveScene, SaveSceneAs, Exit, ReturnToLauncher;
         public Action? Undo, Redo, OpenPreferences, OpenProjectSettings;
         public Action? Play, Pause, Stop;
         public Action? BuildOnly, BuildAndRun, OpenBuildSettings;
@@ -64,6 +64,7 @@ namespace ElintriaEngine.UI.Panels
                 new("Save Scene",      () => SaveScene?.Invoke())   { Shortcut="Ctrl+S" },
                 new("Save Scene As...",() => SaveSceneAs?.Invoke()) { Shortcut="Ctrl+Shift+S" },
                 MenuDropdownItem.Sep,
+                new("Return to Launcher", () => ReturnToLauncher?.Invoke()),
                 new("Exit",            () => Exit?.Invoke())        { Shortcut="Alt+F4" },
             }));
             _menus.Add(("Edit", default, new List<MenuDropdownItem>
