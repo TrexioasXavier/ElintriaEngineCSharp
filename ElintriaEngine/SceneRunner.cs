@@ -40,8 +40,108 @@ namespace ElintriaEngine.Core
         public bool IsRunning => _started;
         public bool IsPaused { get; set; }
 
+        /// <summary>
+        /// The UI document whose button click events will be dispatched to game scripts.
+        /// Set this before calling Start() (or after) — will be used at runtime.
+        /// </summary>
+        public UIDocument? UIDocument { get; set; }
+
         public event Action? Started;
         public event Action? Stopped;
+
+        /// <summary>
+        /// Called by the game runtime (or test) to fire a button's bound script method.
+        /// Finds the first active component whose type name matches TargetScriptName
+        /// and invokes the public void method named TargetMethodName.
+        /// </summary>
+        public bool FireButtonClick(UIButtonElement button)
+        {
+            if (_scene == null || string.IsNullOrEmpty(button.TargetScriptName)) return false;
+
+            // ── Pass 1: find the script as a real component on any active GameObject ──
+            foreach (var go in _scene.All())
+            {
+                // Use go.Components directly — GetComponents<T>() (plural) doesn't exist on GameObject
+                foreach (var comp in go.Components)
+                {
+                    if (comp.GetType().Name != button.TargetScriptName) continue;
+                    if (!InvokeMethod(comp, button.TargetMethodName)) continue;
+                    return true;
+                }
+            }
+
+            // ── Pass 2: script type exists in registry but isn't on any GO yet ──
+            // This happens when the user binds a button to a script that hasn't been
+            // added to a scene object (common during early setup). Create a singleton
+            // instance, attach it to a hidden "UIEventSystem" GO, and invoke.
+            var scriptType = ComponentRegistry.TryGetType(button.TargetScriptName);
+            if (scriptType != null)
+            {
+                Console.WriteLine($"[SceneRunner] Script '{button.TargetScriptName}' not on any GO — " +
+                                  $"creating UIEventSystem singleton.");
+
+                // Find-or-create a dedicated UIEventSystem GameObject
+                GameObject? esGo = null;
+                foreach (var go in _scene.All())
+                    if (go.Name == "__UIEventSystem__") { esGo = go; break; }
+
+                if (esGo == null)
+                {
+                    esGo = new GameObject("__UIEventSystem__");
+                    _scene.AddGameObject(esGo);
+                    SubscribeGO(esGo);
+                }
+
+                // Add the component if it isn't already there
+                Component? comp = null;
+                foreach (var c in esGo.Components)
+                    if (c.GetType().Name == button.TargetScriptName) { comp = c; break; }
+
+                if (comp == null)
+                {
+                    comp = ComponentRegistry.Create(button.TargetScriptName);
+                    if (comp != null)
+                    {
+                        // AddComponent<T>() requires a new() constraint and AddComponentByName
+                        // creates its own instance — neither accepts a pre-built one.
+                        // Attach directly, mirroring what both helpers do internally.
+                        comp.GameObject = esGo;
+                        esGo.Components.Add(comp);
+                        // Bootstrap the new component
+                        SafeCall(comp, "Awake", x => x.Awake());
+                        SafeCall(comp, "OnEnable", x => x.OnEnable());
+                        SafeCall(comp, "OnStart", x => x.OnStart());
+                    }
+                }
+
+                if (comp != null && InvokeMethod(comp, button.TargetMethodName)) return true;
+            }
+
+            Console.WriteLine($"[SceneRunner] No script '{button.TargetScriptName}' with method " +
+                              $"'{button.TargetMethodName}' found in scene or registry.");
+            return false;
+        }
+
+        // Attempt to call a public void method by name on a component. Returns true on success.
+        private bool InvokeMethod(Component comp, string methodName)
+        {
+            if (string.IsNullOrEmpty(methodName)) return false;
+            var method = comp.GetType().GetMethod(methodName,
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+            if (method == null || method.ReturnType != typeof(void) ||
+                method.GetParameters().Length != 0) return false;
+            try
+            {
+                method.Invoke(comp, null);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[SceneRunner] Button click invoke error on " +
+                    $"{comp.GetType().Name}.{methodName}: {ex.InnerException?.Message ?? ex.Message}");
+                return false;
+            }
+        }
 
         // ─────────────────────────────────────────────────────────────────────
         //  Start
@@ -147,8 +247,44 @@ namespace ElintriaEngine.Core
         }
 
         // ─────────────────────────────────────────────────────────────────────
-        //  Script loading
+        //  Editor-time script resolution
+        //  Call this after compilation to swap DynamicScript placeholders in
+        //  the live editor scene with real component instances.
+        //  Returns the number of scripts successfully resolved.
         // ─────────────────────────────────────────────────────────────────────
+        public static int ResolveEditorScripts(Scene scene)
+        {
+            int resolved = 0;
+            foreach (var go in scene.All())
+            {
+                for (int i = go.Components.Count - 1; i >= 0; i--)
+                {
+                    if (go.Components[i] is not DynamicScript ds) continue;
+
+                    var real = ComponentRegistry.Create(ds.ScriptTypeName);
+                    if (real == null) continue;
+
+                    real.Enabled = ds.Enabled;
+                    real.GameObject = go;
+
+                    // Copy any values the user edited in the Inspector while
+                    // the script was still a DynamicScript placeholder
+                    foreach (var kv in ds.FieldValues)
+                    {
+                        var fi = real.GetType().GetField(kv.Key,
+                            BindingFlags.Public | BindingFlags.Instance);
+                        if (fi != null && kv.Value != null)
+                            try { fi.SetValue(real, Convert.ChangeType(kv.Value, fi.FieldType)); }
+                            catch { }
+                    }
+
+                    go.Components[i] = real;
+                    resolved++;
+                    Console.WriteLine($"[Editor] Resolved '{ds.ScriptTypeName}' on '{go.Name}'");
+                }
+            }
+            return resolved;
+        }
 
         public static void LoadUserScripts(string projectRoot = "")
         {
@@ -189,6 +325,7 @@ namespace ElintriaEngine.Core
                 File.Copy(dllPath, sessionDll);
 
                 var asm = Assembly.LoadFrom(sessionDll);
+                ComponentRegistry.UserAssembly = asm;  // expose latest assembly for UI editor reflection
                 int count = 0;
                 foreach (var type in asm.GetExportedTypes())
                 {

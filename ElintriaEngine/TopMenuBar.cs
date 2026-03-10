@@ -43,6 +43,7 @@ namespace ElintriaEngine.UI.Panels
         public Action? Undo, Redo, OpenPreferences, OpenProjectSettings;
         public Action? Play, Pause, Stop;
         public Action? BuildOnly, BuildAndRun, OpenBuildSettings;
+        public Action? RegenerateScripts;
         public Action<string>? ToggleWindow;
 
         private static readonly Color CBar = Color.FromArgb(255, 24, 24, 24);
@@ -116,6 +117,10 @@ namespace ElintriaEngine.UI.Panels
                 MenuDropdownItem.Sep,
                 new("Build",            () => BuildOnly?.Invoke())   { Shortcut="Ctrl+B" },
                 new("Build & Run",      () => BuildAndRun?.Invoke()) { Shortcut="Ctrl+Shift+B" },
+            }));
+            _menus.Add(("Tools", default, new List<MenuDropdownItem>
+            {
+                new("Regenerate Scripts", () => RegenerateScripts?.Invoke()) { Shortcut="Ctrl+Shift+R" },
             }));
             _menus.Add(("Window", default, new List<MenuDropdownItem>
             {

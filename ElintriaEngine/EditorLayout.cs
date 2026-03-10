@@ -91,6 +91,7 @@ namespace ElintriaEngine.UI
             Hierarchy.SetScene(_scene);
             SceneView.SetScene(_scene);
             BuildSettings.SetScene(_scene);
+            BuildSettings.SetUIDocument(_uiDocument);
 
             string assetsDir = System.IO.Path.Combine(projectRoot, "Assets");
             string rootForProject = System.IO.Directory.Exists(assetsDir) ? assetsDir : projectRoot;
@@ -141,12 +142,13 @@ namespace ElintriaEngine.UI
             MenuBar.OpenScene += OpenScene;
             MenuBar.Exit += () => System.Environment.Exit(0);
             MenuBar.ReturnToLauncher += () => ReturnToLauncher?.Invoke();
+            MenuBar.RegenerateScripts += ForceRegenerateScripts;
             MenuBar.BuildOnly += () => { BuildSettings.IsVisible = true; BuildSettings.StartBuild(false); };
             MenuBar.BuildAndRun += () => { BuildSettings.IsVisible = true; BuildSettings.StartBuild(true); };
             MenuBar.OpenBuildSettings += () => BuildSettings.IsVisible = !BuildSettings.IsVisible;
 
             MenuBar.Play += EnterPlayMode;
-            MenuBar.Pause += () => _runner.IsPaused = !_runner.IsPaused;
+            MenuBar.Pause += () => { _runner.IsPaused = !_runner.IsPaused; SceneView.IsPaused = _runner.IsPaused; };
             MenuBar.Stop += ExitPlayMode;
 
             MenuBar.ToggleWindow += name =>
@@ -177,6 +179,25 @@ namespace ElintriaEngine.UI
         private bool _pendingPlayStart = false;  // set when compilation finishes, Start on next Update
 
         // ── Play mode (powered by SceneRunner) ────────────────────────────────
+        private void ForceRegenerateScripts()
+        {
+            if (_scriptsCompiling) return;
+
+            _scriptsCompiling = true;
+            _scriptsDirty = false;
+            Console.WriteLine("[Editor] Force-regenerating scripts...");
+
+            var rootSnapshot = _projectRoot;
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                await Build.BuildSystem.CompileScriptsAsync(rootSnapshot);
+                // Flag main thread to reload user scripts + refresh UI
+                _scriptsCompiling = false;
+                _pendingScriptRefresh = true;
+                Console.WriteLine("[Editor] Script regeneration complete.");
+            });
+        }
+
         private void EnterPlayMode()
         {
             if (_runner.IsRunning || _compilingScripts) return;
@@ -197,6 +218,10 @@ namespace ElintriaEngine.UI
 
             Hierarchy.SetScene(_scene);
             SceneView.SetScene(_scene);
+            SceneView.IsPlaying = true;
+            SceneView.IsPaused = false;
+            SceneView.UIDocument = _uiDocument;
+            SceneView.ActiveTab = SceneViewPanel.ViewTab.Game;
             Inspector.Inspect(null);
 
             // If the watcher is currently compiling, wait for it to finish
@@ -256,6 +281,8 @@ namespace ElintriaEngine.UI
 
             Hierarchy.SetScene(_scene);
             SceneView.SetScene(_scene);
+            SceneView.IsPlaying = false;
+            SceneView.ActiveTab = SceneViewPanel.ViewTab.Scene;
             Inspector.Inspect(null);
         }
 
@@ -273,10 +300,10 @@ namespace ElintriaEngine.UI
             {
                 _pendingScriptRefresh = false;
                 Core.SceneRunner.LoadUserScripts(_projectRoot);
-                // Re-inspect so the inspector re-reads TryGetType with the newly
-                // registered types and shows the real public fields immediately.
+                // Re-inspect inspector and refresh UIEditor script binding panel
                 Inspector.Inspect(Hierarchy.Selected);
-                Console.WriteLine("[Editor] Script types loaded — inspector refreshed.");
+                UIEditor.NotifyScriptsReloaded();
+                Console.WriteLine("[Editor] Script types loaded — inspector + UI editor refreshed.");
             }
 
             // ── Start runner once compilation finishes ────────────────────────
@@ -284,6 +311,7 @@ namespace ElintriaEngine.UI
             {
                 _pendingPlayStart = false;
                 Console.WriteLine("[Editor] Starting SceneRunner...");
+                _runner.UIDocument = _uiDocument;
                 _runner.Start(_scene, _projectRoot);
             }
 
@@ -313,13 +341,6 @@ namespace ElintriaEngine.UI
 
             if (BuildSettings.IsVisible) BuildSettings.OnRender(r);
             if (UIEditor.IsVisible) UIEditor.OnRender(r);
-
-            // Render UIDocument elements as a game overlay inside the scene view
-            if (_uiDocument.Elements.Count > 0)
-            {
-                var sv = SceneView.ContentRect;
-                Rendering.UIDocumentRenderer.Render(r, _uiDocument, sv);
-            }
 
             // Push live compile state into the menu bar so the indicator updates
             MenuBar.IsCompiling = _scriptsCompiling || (_watcher?.IsCompiling ?? false);
@@ -446,6 +467,11 @@ namespace ElintriaEngine.UI
             }
             SceneSerializer.Save(_scene, _scene.FilePath);
             Console.WriteLine($"[Editor] Saved scene → {_scene.FilePath}");
+
+            // Save UIDocument alongside the scene (.uidoc file)
+            string uiPath = System.IO.Path.ChangeExtension(_scene.FilePath, ".uidoc");
+            Core.UIDocumentSerializer.SaveToFile(_uiDocument, uiPath);
+            Console.WriteLine($"[Editor] Saved UI → {uiPath}");
         }
 
         private void OpenScene()

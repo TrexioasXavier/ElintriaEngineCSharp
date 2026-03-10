@@ -267,6 +267,13 @@ namespace ElintriaEngine.Core
             { "DynamicScript",   typeof(DynamicScript)   },
         };
 
+        /// <summary>
+        /// The most recently loaded user-script assembly (set by SceneRunner.LoadUserScripts).
+        /// UIEditorPanel uses this to enumerate public void methods without scanning all
+        /// AppDomain assemblies (which would include stale session DLLs from previous compiles).
+        /// </summary>
+        public static System.Reflection.Assembly? UserAssembly { get; internal set; }
+
         public static void Register(string name, Type type) => _map[name] = type;
 
         /// <summary>Returns the Type for a registered component name, or null if not found.</summary>
