@@ -1,69 +1,65 @@
-﻿using ElintriaEngine.Core;
-using ElintriaEngine.UI.Panels;
-using OpenTK.Windowing.Common;
-using OpenTK.Windowing.GraphicsLibraryFramework;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using OpenTK.Windowing.Common;
+using OpenTK.Windowing.GraphicsLibraryFramework;
+using ElintriaEngine.Core;
+using ElintriaEngine.UI.Panels;
 
 namespace ElintriaEngine.UI
 {
     /// <summary>
-    /// Full-window project launcher.
+    /// Full-window project launcher shown on startup.
     ///
-    /// BUG FIX NOTES:
-    ///   All interactive rects (text fields, buttons, cards) are CACHED during
-    ///   Render() into _hitRects and _fieldRects. OnMouseDown reads from those
-    ///   caches rather than recomputing y-positions independently, which was
-    ///   causing misaligned hit areas and broken field interactivity.
+    /// Layout
+    /// ──────
+    ///  Left sidebar  — logo, action buttons, project list
+    ///  Right panel   — tabbed: New Project | Project Info | Settings
     ///
-    ///   CommitEdit() is no longer called blindly at the top of OnMouseDown.
-    ///   Instead it is only called when clicking something OTHER than the
-    ///   currently-active field, preventing the "Open Project" click from being
-    ///   swallowed by an edit commit.
+    /// Hit-testing uses cached rects built during Render() so click positions
+    /// always match exactly what was drawn.
     /// </summary>
     public sealed class ProjectLauncherPanel
     {
+        // ── Events ────────────────────────────────────────────────────────────
         public event Action<string>? ProjectOpened;
 
-        // ── Mode ─────────────────────────────────────────────────────────────
-        private enum RightMode { NewProject, ProjectInfo }
+        // ── Right panel modes ─────────────────────────────────────────────────
+        private enum RightMode { NewProject, ProjectInfo, Settings }
         private RightMode _mode = RightMode.NewProject;
 
-        // ── Data ─────────────────────────────────────────────────────────────
+        // ── Data ──────────────────────────────────────────────────────────────
         private List<ProjectManifest> _projects = new();
         private ProjectManifest? _selected;
         private bool _confirmDelete;
+        private EngineSettings _settings = ProjectManager.LoadSettings();
 
-        // New-project form values
+        // New-project form
         private string _newName = "MyProject";
         private string _newPath = "";
         private ProjectType _newType = ProjectType.ThreeD;
         private string _newDesc = "";
         private string? _newError;
-        private string? _newSuccess;
+        private string? _newOk;
 
-        // ── Text field editing ────────────────────────────────────────────────
+        // ── Text-field editing ─────────────────────────────────────────────────
         private string? _editId;
         private string _editBuf = "";
         private Action<string>? _editCommit;
 
-        // ── Hit-test cache (rebuilt every Render call) ────────────────────────
-        // Generic clickable: id -> (rect, action)
+        // ── Hit-test cache (rebuilt each frame) ────────────────────────────────
         private readonly Dictionary<string, (RectangleF Rect, Action Action)> _hitRects = new();
-        // Text fields: id -> (rect, currentValue, setter)
         private readonly Dictionary<string, (RectangleF Rect, Func<string> Getter, Action<string> Setter)> _fieldRects = new();
-        // Project card rows: index -> (rect, manifest)
         private readonly List<(RectangleF Rect, ProjectManifest Proj)> _projRows = new();
 
-        // ── Layout ───────────────────────────────────────────────────────────
+        // ── Layout ────────────────────────────────────────────────────────────
         private int _winW, _winH;
-        private const float SideW = 276f;
+        private const float SideW = 280f;
         private const float PAD = 14f;
-        private const float RowH = 62f;
+        private const float RowH = 66f;
 
-        // ── Colors ───────────────────────────────────────────────────────────
+        // ── Colors ────────────────────────────────────────────────────────────
         private static readonly Color CBg = Color.FromArgb(255, 20, 20, 22);
         private static readonly Color CSide = Color.FromArgb(255, 27, 27, 30);
         private static readonly Color CCard = Color.FromArgb(255, 32, 32, 36);
@@ -81,45 +77,60 @@ namespace ElintriaEngine.UI
         private static readonly Color CField = Color.FromArgb(255, 28, 28, 34);
         private static readonly Color CFieldH = Color.FromArgb(255, 36, 36, 44);
         private static readonly Color CFieldEd = Color.FromArgb(255, 22, 40, 70);
+        private static readonly Color CGear = Color.FromArgb(255, 90, 90, 100);
 
         private PointF _mouse;
 
-        // ── Constructor ───────────────────────────────────────────────────────
+        // ── Constructor ────────────────────────────────────────────────────────
         public ProjectLauncherPanel()
         {
             _newPath = ProjectManager.DefaultProjectsDirectory;
+
+            // Auto-scan on startup if enabled
+            if (_settings.AutoScanOnStartup)
+                ProjectManager.ScanFolderForProjects(ProjectManager.DefaultProjectsDirectory);
+
             Refresh();
         }
 
-        private void Refresh() => _projects = ProjectManager.GetRecentProjects();
+        private void Refresh()
+        {
+            _projects = ProjectManager.GetRecentProjects();
+            _newPath = ProjectManager.DefaultProjectsDirectory;
+        }
 
-        // ═════════════════════════════════════════════════════════════════════
-        //  RENDER — builds hit caches while drawing
-        // ═════════════════════════════════════════════════════════════════════
+        // ═══════════════════════════════════════════════════════════════════════
+        //  RENDER — rebuilds all hit-test caches while drawing
+        // ═══════════════════════════════════════════════════════════════════════
         public void Render(IEditorRenderer r, int winW, int winH)
         {
             _winW = winW; _winH = winH;
-
-            // Clear caches every frame
             _hitRects.Clear();
             _fieldRects.Clear();
             _projRows.Clear();
 
             r.FillRect(new RectangleF(0, 0, winW, winH), CBg);
-
             DrawSidebar(r, winH);
 
             var right = new RectangleF(SideW, 0, winW - SideW, winH);
             r.FillRect(right, CBg);
             r.PushClip(right);
-            if (_mode == RightMode.NewProject)
-                DrawNewForm(r, right);
-            else if (_mode == RightMode.ProjectInfo && _selected != null)
-                DrawInfoPanel(r, right, _selected);
+
+            switch (_mode)
+            {
+                case RightMode.NewProject: DrawNewForm(r, right); break;
+                case RightMode.ProjectInfo when _selected != null:
+                    DrawInfoPanel(r, right, _selected); break;
+                case RightMode.Settings: DrawSettingsPanel(r, right); break;
+                default: DrawNewForm(r, right); break;
+            }
+
             r.PopClip();
         }
 
-        // ── Sidebar ───────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
+        //  Sidebar
+        // ─────────────────────────────────────────────────────────────────────
         private void DrawSidebar(IEditorRenderer r, int winH)
         {
             var sb = new RectangleF(0, 0, SideW, winH);
@@ -128,45 +139,45 @@ namespace ElintriaEngine.UI
 
             float y = PAD;
 
-            // Logo block
-            var logo = new RectangleF(PAD, y, SideW - PAD * 2, 50f);
+            // Logo
+            var logo = new RectangleF(PAD, y, SideW - PAD * 2, 52f);
             r.FillRect(logo, Color.FromArgb(255, 30, 30, 34));
             r.DrawRect(logo, CBorder);
-            r.FillRect(new RectangleF(PAD, y, 4f, 50f), CAccent);
-            r.DrawText("ELINTRIA ENGINE", new PointF(PAD + 12f, y + 8f), CAccent, 12f);
-            r.DrawText("Project Manager", new PointF(PAD + 12f, y + 28f), CDim, 10f);
-            y += 58f;
+            r.FillRect(new RectangleF(PAD, y, 4f, 52f), CAccent);
+            r.DrawText("ELINTRIA ENGINE", new PointF(PAD + 14f, y + 8f), CAccent, 12f);
+            r.DrawText("Project Manager", new PointF(PAD + 14f, y + 28f), CDim, 10f);
+            y += 62f;
 
-            // New Project button
-            DrawSideBtn(r, "new_project", "＋  New Project", PAD, y,
-                SideW - PAD * 2, 32f,
-                _mode == RightMode.NewProject ? CAccent : Color.FromArgb(255, 42, 42, 48),
+            // Action buttons
+            DrawSideBtn(r, "btn_new", "＋  New Project", PAD, y, SideW - PAD * 2, 32f,
+                _mode == RightMode.NewProject ? CAccent : Color.FromArgb(255, 42, 42, 50),
                 _mode == RightMode.NewProject ? Color.White : CText,
-                () =>
-                {
-                    _mode = RightMode.NewProject;
-                    _selected = null;
-                    _confirmDelete = false;
-                    _newError = _newSuccess = null;
-                });
+                () => { _mode = RightMode.NewProject; _selected = null; _confirmDelete = false; _newError = _newOk = null; });
             y += 36f;
 
-            DrawSideBtn(r, "open_disk", "📂  Open from disk", PAD, y,
-                SideW - PAD * 2, 32f,
-                Color.FromArgb(255, 38, 38, 44), CText, OpenFromDisk);
-            y += 40f;
+            DrawSideBtn(r, "btn_scan", "⟳  Scan Default Folder", PAD, y, SideW - PAD * 2, 32f,
+                Color.FromArgb(255, 36, 36, 44), CText,
+                () => { ScanAndRefresh(); });
+            y += 36f;
 
+            DrawSideBtn(r, "btn_settings", "⚙  Settings", PAD, y, SideW - PAD * 2, 32f,
+                _mode == RightMode.Settings ? Color.FromArgb(255, 50, 50, 60) : Color.FromArgb(255, 36, 36, 44),
+                _mode == RightMode.Settings ? CText : CGear,
+                () => { _mode = RightMode.Settings; _selected = null; });
+            y += 44f;
+
+            // Divider + count
             r.DrawLine(new PointF(PAD, y), new PointF(SideW - PAD, y), CBorder);
             y += 8f;
-            r.DrawText($"RECENT  ({_projects.Count})", new PointF(PAD + 4f, y), CDim, 8f);
-            y += 16f;
+            r.DrawText($"PROJECTS  ({_projects.Count})", new PointF(PAD + 4f, y), CDim, 8f);
+            y += 18f;
 
-            // Project rows — push clip so they don't overflow sidebar
-            r.PushClip(new RectangleF(0, y, SideW, winH - y));
+            // Project rows
+            r.PushClip(new RectangleF(0, y, SideW, winH - y - 4f));
             if (_projects.Count == 0)
             {
-                r.DrawText("No projects yet.", new PointF(PAD + 4f, y + 10f), CDim, 10f);
-                r.DrawText("Click + New Project to start.", new PointF(PAD + 4f, y + 28f), CDim, 9f);
+                r.DrawText("No projects found.", new PointF(PAD + 6f, y + 10f), CDim, 9f);
+                r.DrawText("Create one or scan your projects folder.", new PointF(PAD + 6f, y + 26f), CDim, 8f);
             }
             foreach (var proj in _projects)
             {
@@ -178,9 +189,13 @@ namespace ElintriaEngine.UI
 
                 Color tc = proj.Type == ProjectType.TwoD ? CTag2D : CTag3D;
                 DrawPill(r, proj.Type == ProjectType.TwoD ? "2D" : "3D", tc, rc.X + 6f, rc.Y + 6f);
-                r.DrawText(proj.Name, new PointF(rc.X + 32f, rc.Y + 5f), CText, 11f);
-                r.DrawText(TruncPath(proj.RootPath, 28), new PointF(rc.X + 6f, rc.Y + 26f), CDim, 8f);
+                r.DrawText(proj.Name, new PointF(rc.X + 34f, rc.Y + 5f), CText, 11f);
+                r.DrawText(TruncPath(proj.RootPath, 30), new PointF(rc.X + 6f, rc.Y + 26f), CDim, 8f);
                 r.DrawText(RelDate(proj.LastOpenedAt), new PointF(rc.X + 6f, rc.Y + 42f), CDim, 8f);
+
+                // Scene/script count badges
+                if (proj.SceneCount > 0)
+                    r.DrawText($"{proj.SceneCount}sc", new PointF(rc.Right - 50f, rc.Y + 42f), CDim, 8f);
 
                 _projRows.Add((rc, proj));
                 y += RowH;
@@ -198,7 +213,9 @@ namespace ElintriaEngine.UI
             _hitRects[id] = (new RectangleF(x, y, w, h), action);
         }
 
-        // ── New project form ───────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
+        //  New Project form
+        // ─────────────────────────────────────────────────────────────────────
         private void DrawNewForm(IEditorRenderer r, RectangleF panel)
         {
             float cx = panel.X + panel.Width / 2f;
@@ -209,27 +226,34 @@ namespace ElintriaEngine.UI
             r.DrawText("Create New Project", new PointF(x0, y), CText, 17f);
             y += 28f;
             r.DrawLine(new PointF(x0, y), new PointF(x0 + fw, y), CBorder);
-            y += 16f;
+            y += 18f;
 
-            // Project name
+            // Project Name
             r.DrawText("Project Name", new PointF(x0, y), CDim, 9f);
             y += 16f;
             DrawField(r, "f_name", x0, y, fw, _newName,
-                v => { _newName = v; _newPath = Path.Combine(ProjectManager.DefaultProjectsDirectory, v); });
+                v => {
+                    _newName = v;
+                    _newPath = Path.Combine(ProjectManager.DefaultProjectsDirectory, v);
+                });
             y += 30f;
 
-            // Save location
-            r.DrawText("Save Location", new PointF(x0, y), CDim, 9f);
+            // Save Location — shown as final path (DefaultDir / name)
+            r.DrawText("Project Folder  (inside your default projects directory)", new PointF(x0, y), CDim, 9f);
             y += 16f;
             DrawField(r, "f_path", x0, y, fw - 96f, _newPath, v => _newPath = v);
-            // Browse btn
-            var brow = new RectangleF(x0 + fw - 92f, y, 88f, 26f);
-            bool bhov = brow.Contains(_mouse);
-            r.FillRect(brow, bhov ? Color.FromArgb(255, 50, 50, 58) : Color.FromArgb(255, 38, 38, 44));
-            r.DrawRect(brow, CBorder);
-            r.DrawText("Browse…", new PointF(brow.X + 10f, brow.Y + 6f), CText, 9f);
-            _hitRects["browse"] = (brow, BrowseFolder);
+            var browseBtn = new RectangleF(x0 + fw - 92f, y, 88f, 26f);
+            bool bh = browseBtn.Contains(_mouse);
+            r.FillRect(browseBtn, bh ? Color.FromArgb(255, 50, 50, 58) : Color.FromArgb(255, 38, 38, 44));
+            r.DrawRect(browseBtn, CBorder);
+            r.DrawText("Browse…", new PointF(browseBtn.X + 10f, browseBtn.Y + 6f), CText, 9f);
+            _hitRects["browse"] = (browseBtn, BrowseFolder);
             y += 30f;
+
+            // Default folder hint
+            r.DrawText($"Default folder: {TruncPath(ProjectManager.DefaultProjectsDirectory, 48)}",
+                new PointF(x0, y), CDim, 8f);
+            y += 20f;
 
             // Description
             r.DrawText("Description  (optional)", new PointF(x0, y), CDim, 9f);
@@ -237,19 +261,17 @@ namespace ElintriaEngine.UI
             DrawField(r, "f_desc", x0, y, fw, _newDesc, v => _newDesc = v);
             y += 34f;
 
-            // Type cards
+            // Project Type cards
             r.DrawText("Project Type", new PointF(x0, y), CDim, 9f);
             y += 16f;
             float tw = (fw - 10f) / 2f;
-            DrawTypeCard(r, "tc_2d", x0, y, tw, 80f,
+            DrawTypeCard(r, "tc_2d", x0, y, tw, 82f,
                 "2D", "Orthographic camera\nFlat physics\nSprite renderer",
-                _newType == ProjectType.TwoD, CTag2D,
-                () => _newType = ProjectType.TwoD);
-            DrawTypeCard(r, "tc_3d", x0 + tw + 10f, y, tw, 80f,
+                _newType == ProjectType.TwoD, CTag2D, () => _newType = ProjectType.TwoD);
+            DrawTypeCard(r, "tc_3d", x0 + tw + 10f, y, tw, 82f,
                 "3D", "Perspective camera\n3D physics\nMesh renderer",
-                _newType == ProjectType.ThreeD, CTag3D,
-                () => _newType = ProjectType.ThreeD);
-            y += 94f;
+                _newType == ProjectType.ThreeD, CTag3D, () => _newType = ProjectType.ThreeD);
+            y += 96f;
 
             // Messages
             if (_newError != null)
@@ -259,24 +281,26 @@ namespace ElintriaEngine.UI
                 r.DrawText("⚠  " + _newError, new PointF(x0 + 10f, y + 6f), CDanger, 10f);
                 y += 34f;
             }
-            if (_newSuccess != null)
+            if (_newOk != null)
             {
                 r.FillRect(new RectangleF(x0, y, fw, 26f), Color.FromArgb(55, 50, 180, 80));
                 r.DrawRect(new RectangleF(x0, y, fw, 26f), CSuccess);
-                r.DrawText("✓  " + _newSuccess, new PointF(x0 + 10f, y + 6f), CSuccess, 10f);
+                r.DrawText("✓  " + _newOk, new PointF(x0 + 10f, y + 6f), CSuccess, 10f);
                 y += 34f;
             }
 
             // Create button
-            var cr = new RectangleF(x0 + fw - 155f, y, 155f, 36f);
-            bool chov = cr.Contains(_mouse);
-            r.FillRect(cr, chov ? CAccentH : CAccent);
+            var cr = new RectangleF(x0 + fw - 155f, y, 155f, 38f);
+            bool ch = cr.Contains(_mouse);
+            r.FillRect(cr, ch ? CAccentH : CAccent);
             r.DrawRect(cr, Color.FromArgb(255, 38, 88, 178));
-            r.DrawText("Create Project  →", new PointF(cr.X + 14f, cr.Y + 10f), Color.White, 11f);
+            r.DrawText("Create Project  →", new PointF(cr.X + 14f, cr.Y + 11f), Color.White, 11f);
             _hitRects["create"] = (cr, TryCreate);
         }
 
-        // ── Info panel ─────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
+        //  Project Info panel
+        // ─────────────────────────────────────────────────────────────────────
         private void DrawInfoPanel(IEditorRenderer r, RectangleF panel, ProjectManifest proj)
         {
             float cx = panel.X + panel.Width / 2f;
@@ -284,21 +308,19 @@ namespace ElintriaEngine.UI
             float x0 = cx - fw / 2f;
             float y = panel.Y + PAD * 2;
 
-            // Title row
             r.DrawText(proj.Name, new PointF(x0, y), CText, 19f);
             Color tc = proj.Type == ProjectType.TwoD ? CTag2D : CTag3D;
-            DrawPill(r, proj.Type == ProjectType.TwoD ? "2D" : "3D", tc, x0 + fw - 30f, y + 4f);
+            DrawPill(r, proj.Type == ProjectType.TwoD ? "2D" : "3D", tc, x0 + fw - 32f, y + 4f);
             y += 32f;
             r.DrawLine(new PointF(x0, y), new PointF(x0 + fw, y), CBorder);
-            y += 12f;
+            y += 14f;
 
             void Row(string lbl, string val)
             {
                 r.DrawText(lbl + ":", new PointF(x0, y + 2f), CDim, 9f);
-                r.DrawText(val, new PointF(x0 + 112f, y + 2f), CText, 9f);
+                r.DrawText(val, new PointF(x0 + 116f, y + 2f), CText, 9f);
                 y += 22f;
             }
-
             Row("Location", proj.RootPath);
             Row("Type", proj.Type == ProjectType.TwoD ? "2D" : "3D");
             Row("Created", proj.CreatedAt.ToLocalTime().ToString("MMM d, yyyy  h:mm tt"));
@@ -309,26 +331,23 @@ namespace ElintriaEngine.UI
             if (!string.IsNullOrEmpty(proj.Description)) Row("Description", proj.Description);
             y += 8f;
             r.DrawLine(new PointF(x0, y), new PointF(x0 + fw, y), CBorder);
-            y += 16f;
+            y += 18f;
 
             // Action buttons
-            float bh = 40f;
-
-            // Open
+            float bh = 42f;
             var openR = new RectangleF(x0, y, fw - 202f, bh);
             bool oh = openR.Contains(_mouse);
             r.FillRect(openR, oh ? CAccentH : CAccent);
             r.DrawRect(openR, Color.FromArgb(255, 38, 88, 178));
-            r.DrawText("▶  Open Project", new PointF(openR.X + 16f, openR.Y + 11f), Color.White, 12f);
+            r.DrawText("▶  Open Project", new PointF(openR.X + 16f, openR.Y + 13f), Color.White, 12f);
             _hitRects["open_proj"] = (openR, () => DoOpenProject(proj));
 
-            // Remove
-            var remR = new RectangleF(x0 + fw - 194f, y, 90f, bh);
+            var remR = new RectangleF(x0 + fw - 194f, y, 92f, bh);
             bool rh = remR.Contains(_mouse);
-            r.FillRect(remR, rh ? Color.FromArgb(255, 50, 50, 58) : Color.FromArgb(255, 38, 38, 44));
+            r.FillRect(remR, rh ? Lighten(CCard) : CCard);
             r.DrawRect(remR, CBorder);
-            r.DrawText("Remove", new PointF(remR.X + 12f, remR.Y + 8f), CText, 10f);
-            r.DrawText("(keep files)", new PointF(remR.X + 6f, remR.Y + 22f), CDim, 8f);
+            r.DrawText("Remove", new PointF(remR.X + 12f, remR.Y + 9f), CText, 10f);
+            r.DrawText("(keep files)", new PointF(remR.X + 6f, remR.Y + 23f), CDim, 8f);
             _hitRects["remove"] = (remR, () =>
             {
                 ProjectManager.RemoveFromRegistry(proj);
@@ -336,42 +355,180 @@ namespace ElintriaEngine.UI
             }
             );
 
-            // Delete
             bool cf = _confirmDelete;
             var delR = new RectangleF(x0 + fw - 96f, y, 96f, bh);
-            bool dh2 = delR.Contains(_mouse) || cf;
-            r.FillRect(delR, dh2 ? CDangerH : CDanger);
+            bool dh = delR.Contains(_mouse) || cf;
+            r.FillRect(delR, dh ? CDangerH : CDanger);
             r.DrawRect(delR, Color.FromArgb(255, 138, 33, 33));
             if (cf)
-            {
-                r.DrawText("⚠ Confirm?", new PointF(delR.X + 8f, delR.Y + 12f), Color.White, 9f);
-            }
+                r.DrawText("⚠ Confirm?", new PointF(delR.X + 8f, delR.Y + 13f), Color.White, 9f);
             else
             {
-                r.DrawText("🗑 Delete", new PointF(delR.X + 10f, delR.Y + 8f), Color.White, 10f);
-                r.DrawText("(all files)", new PointF(delR.X + 8f, delR.Y + 22f),
+                r.DrawText("🗑 Delete", new PointF(delR.X + 10f, delR.Y + 9f), Color.White, 10f);
+                r.DrawText("(all files)", new PointF(delR.X + 8f, delR.Y + 23f),
                     Color.FromArgb(255, 255, 175, 175), 8f);
             }
             _hitRects["delete"] = (delR, () =>
             {
                 if (_confirmDelete)
-                {
-                    ProjectManager.DeleteProject(proj, deleteFiles: true);
-                    _selected = null; _mode = RightMode.NewProject; _confirmDelete = false; Refresh();
-                }
+                { ProjectManager.DeleteProject(proj, true); _selected = null; _mode = RightMode.NewProject; _confirmDelete = false; Refresh(); }
                 else _confirmDelete = true;
             }
             );
 
             if (cf)
             {
-                y += bh + 6f;
+                y += bh + 8f;
                 r.DrawText("⚠  All project files will be permanently deleted. Click Delete again to confirm.",
                     new PointF(x0, y), CDanger, 9f);
             }
         }
 
-        // ── Field helpers ─────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
+        //  Settings panel
+        // ─────────────────────────────────────────────────────────────────────
+        private void DrawSettingsPanel(IEditorRenderer r, RectangleF panel)
+        {
+            float cx = panel.X + panel.Width / 2f;
+            float fw = Math.Min(560f, panel.Width - PAD * 4);
+            float x0 = cx - fw / 2f;
+            float y = panel.Y + PAD * 2;
+
+            r.DrawText("Settings", new PointF(x0, y), CText, 17f);
+            y += 28f;
+            r.DrawLine(new PointF(x0, y), new PointF(x0 + fw, y), CBorder);
+            y += 18f;
+
+            // ── Default Projects Folder ───────────────────────────────────────
+            DrawSectionHeader(r, x0, fw, "PROJECT STORAGE", ref y);
+
+            r.DrawText("Default Projects Folder", new PointF(x0, y), CDim, 9f);
+            y += 16f;
+            r.DrawText("All new projects are created as subfolders inside this directory.",
+                new PointF(x0, y), CDim, 8f);
+            y += 14f;
+
+            string curDir = ProjectManager.DefaultProjectsDirectory;
+            DrawField(r, "s_dir", x0, y, fw - 120f, curDir,
+                v => { ProjectManager.DefaultProjectsDirectory = v; _newPath = v; _settings = ProjectManager.LoadSettings(); });
+
+            var setBtn = new RectangleF(x0 + fw - 116f, y, 56f, 26f);
+            bool sbh = setBtn.Contains(_mouse);
+            r.FillRect(setBtn, sbh ? CAccentH : CAccent);
+            r.DrawRect(setBtn, Color.FromArgb(255, 38, 88, 178));
+            r.DrawText("Apply", new PointF(setBtn.X + 9f, setBtn.Y + 6f), Color.White, 9f);
+            _hitRects["s_apply"] = (setBtn, () =>
+            {
+                if (_fieldRects.TryGetValue("s_dir", out var fe) && _editId == "s_dir")
+                    CommitEdit();
+                _newOk = null;
+                Refresh();
+            }
+            );
+
+            var scanBtn = new RectangleF(x0 + fw - 56f, y, 52f, 26f);
+            bool scbh = scanBtn.Contains(_mouse);
+            r.FillRect(scanBtn, scbh ? Lighten(CCard) : CCard);
+            r.DrawRect(scanBtn, CBorder);
+            r.DrawText("Scan", new PointF(scanBtn.X + 10f, scanBtn.Y + 6f), CText, 9f);
+            _hitRects["s_scan"] = (scanBtn, ScanAndRefresh);
+            y += 34f;
+
+            // Show what's currently in the folder
+            bool exists = Directory.Exists(curDir);
+            if (exists)
+            {
+                r.DrawText($"✓  Folder exists", new PointF(x0, y), CSuccess, 9f);
+                // Count sub-projects
+                int cnt = 0;
+                try
+                {
+                    foreach (var sub in Directory.GetDirectories(curDir))
+                        if (File.Exists(Path.Combine(sub, "project.elintria"))) cnt++;
+                    if (File.Exists(Path.Combine(curDir, "project.elintria"))) cnt++;
+                }
+                catch { }
+                if (cnt > 0)
+                    r.DrawText($"  {cnt} project folder(s) detected", new PointF(x0 + 120f, y), CDim, 9f);
+            }
+            else
+            {
+                r.DrawText("⚠  Folder does not exist yet (will be created on first project)",
+                    new PointF(x0, y), Color.FromArgb(255, 200, 155, 40), 9f);
+            }
+            y += 24f;
+
+            // Create folder button
+            if (!exists)
+            {
+                var mkBtn = new RectangleF(x0, y, 180f, 28f);
+                bool mkh = mkBtn.Contains(_mouse);
+                r.FillRect(mkBtn, mkh ? Lighten(CCard) : CCard);
+                r.DrawRect(mkBtn, CBorder);
+                r.DrawText("Create Folder Now", new PointF(mkBtn.X + 10f, mkBtn.Y + 7f), CText, 9f);
+                _hitRects["s_mkdir"] = (mkBtn, () =>
+                {
+                    try { Directory.CreateDirectory(curDir); }
+                    catch (Exception ex) { Console.WriteLine($"[Settings] mkdir: {ex.Message}"); }
+                }
+                );
+                y += 36f;
+            }
+
+            y += 8f;
+            r.DrawLine(new PointF(x0, y), new PointF(x0 + fw, y), CBorder);
+            y += 16f;
+
+            // ── Auto-scan ─────────────────────────────────────────────────────
+            DrawSectionHeader(r, x0, fw, "STARTUP BEHAVIOUR", ref y);
+
+            bool autoScan = _settings.AutoScanOnStartup;
+            var asRect = new RectangleF(x0, y, 18f, 18f);
+            r.FillRect(asRect, autoScan ? CAccent : CField);
+            r.DrawRect(asRect, autoScan ? CAccent : CBorder);
+            if (autoScan) r.DrawText("✓", new PointF(asRect.X + 3f, asRect.Y + 1f), Color.White, 10f);
+            r.DrawText("Auto-scan default folder on startup",
+                new PointF(x0 + 24f, y + 2f), CText, 10f);
+            r.DrawText("(finds new projects automatically without manually clicking Scan)",
+                new PointF(x0 + 24f, y + 16f), CDim, 8f);
+            _hitRects["s_autoscan"] = (new RectangleF(x0, y, fw, 32f), () =>
+            {
+                _settings.AutoScanOnStartup = !_settings.AutoScanOnStartup;
+                ProjectManager.SaveSettings(_settings);
+            }
+            );
+            y += 42f;
+
+            y += 8f;
+            r.DrawLine(new PointF(x0, y), new PointF(x0 + fw, y), CBorder);
+            y += 16f;
+
+            // ── Known Projects ────────────────────────────────────────────────
+            DrawSectionHeader(r, x0, fw, $"KNOWN PROJECTS  ({_projects.Count})", ref y);
+
+            if (_projects.Count == 0)
+            {
+                r.DrawText("No projects registered yet.", new PointF(x0, y), CDim, 9f);
+                y += 18f;
+            }
+
+            foreach (var proj in _projects)
+            {
+                bool exists2 = File.Exists(proj.ManifestPath);
+                Color lc = exists2 ? CText : CDanger;
+                r.DrawText(exists2 ? "●" : "✕", new PointF(x0, y + 3f),
+                    exists2 ? CSuccess : CDanger, 8f);
+                r.DrawText(proj.Name, new PointF(x0 + 14f, y + 3f), lc, 9f);
+                r.DrawText(TruncPath(proj.RootPath, 52),
+                    new PointF(x0 + 14f, y + 15f), CDim, 7f);
+                y += 30f;
+                if (y > panel.Y + panel.Height - 20f) break;
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        //  Drawing helpers
+        // ─────────────────────────────────────────────────────────────────────
         private void DrawField(IEditorRenderer r, string id, float x, float y, float w,
             string value, Action<string> setter)
         {
@@ -380,14 +537,12 @@ namespace ElintriaEngine.UI
             var fr = new RectangleF(x, y, w, 26f);
             r.FillRect(fr, ed ? CFieldEd : hov ? CFieldH : CField);
             r.DrawRect(fr, ed ? CAccent : hov ? CBorder : Color.FromArgb(255, 44, 44, 52));
-            r.DrawText(ed ? _editBuf + "|" : (value.Length > 0 ? value : " "),
-                new PointF(fr.X + 8f, fr.Y + 6f), ed ? Color.White : CText, 10f);
-
+            string disp = ed ? _editBuf + "|" : (value.Length > 0 ? value : " ");
+            r.DrawText(disp, new PointF(fr.X + 8f, fr.Y + 6f), ed ? Color.White : CText, 10f);
             _fieldRects[id] = (fr, () => value, setter);
         }
 
-        private void DrawTypeCard(IEditorRenderer r, string id,
-            float x, float y, float w, float h,
+        private void DrawTypeCard(IEditorRenderer r, string id, float x, float y, float w, float h,
             string title, string bullets, bool selected, Color ac, Action action)
         {
             bool hov = !selected && new RectangleF(x, y, w, h).Contains(_mouse);
@@ -412,63 +567,59 @@ namespace ElintriaEngine.UI
             r.DrawText(text, new PointF(pill.X + 5f, pill.Y + 1f), col, 8f);
         }
 
-        // ═════════════════════════════════════════════════════════════════════
-        //  Input — reads from cached rects, no y recomputation
-        // ═════════════════════════════════════════════════════════════════════
+        private static void DrawSectionHeader(IEditorRenderer r, float x0, float fw,
+            string title, ref float y)
+        {
+            r.DrawText(title, new PointF(x0, y), CDim, 8f);
+            y += 16f;
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        //  Input — reads from cached hit rects only
+        // ═══════════════════════════════════════════════════════════════════════
         public void OnMouseMove(PointF pos) => _mouse = pos;
 
         public void OnMouseDown(MouseButtonEventArgs e, PointF pos)
         {
             if (e.Button != MouseButton.Left) return;
 
-            // ── Project list (sidebar) ────────────────────────────────────────
+            // ── Project rows ──────────────────────────────────────────────────
             foreach (var (rect, proj) in _projRows)
             {
-                if (rect.Contains(pos))
+                if (!rect.Contains(pos)) continue;
+                if (proj == _selected && _mode == RightMode.ProjectInfo)
+                    DoOpenProject(proj);
+                else
                 {
-                    // Clicking the currently selected project opens it directly
-                    if (proj == _selected && _mode == RightMode.ProjectInfo)
-                        DoOpenProject(proj);
-                    else
-                    {
-                        _selected = proj;
-                        _mode = RightMode.ProjectInfo;
-                        _confirmDelete = false;
-                        CommitIfNotSelf(null); // commit any open edit
-                    }
-                    return;
+                    CommitIfActive(null);
+                    _selected = proj;
+                    _mode = RightMode.ProjectInfo;
+                    _confirmDelete = false;
                 }
+                return;
             }
 
             // ── Text fields ───────────────────────────────────────────────────
             foreach (var (id, entry) in _fieldRects)
             {
-                if (entry.Rect.Contains(pos))
-                {
-                    // Commit previous edit (different field) then start new
-                    if (_editId != null && _editId != id) CommitEdit();
-                    if (_editId != id) StartEdit(id, entry.Getter(), entry.Setter);
-                    return;
-                }
+                if (!entry.Rect.Contains(pos)) continue;
+                if (_editId != null && _editId != id) CommitEdit();
+                if (_editId != id) StartEdit(id, entry.Getter(), entry.Setter);
+                return;
             }
 
-            // Click outside any field → commit any open edit
+            // Clicking outside a field commits the edit
             if (_editId != null) CommitEdit();
 
-            // ── General hit rects (buttons, type cards, etc.) ─────────────────
-            // Dispatch in order: check _confirmDelete reset for non-delete clicks
+            // ── General hit rects ─────────────────────────────────────────────
             foreach (var (id, entry) in _hitRects)
             {
-                if (entry.Rect.Contains(pos))
-                {
-                    // Any non-delete click cancels delete confirmation
-                    if (id != "delete") _confirmDelete = false;
-                    entry.Action();
-                    return;
-                }
+                if (!entry.Rect.Contains(pos)) continue;
+                if (id != "delete") _confirmDelete = false;
+                entry.Action();
+                return;
             }
 
-            // Click on blank area: cancel delete confirmation
             _confirmDelete = false;
         }
 
@@ -489,28 +640,36 @@ namespace ElintriaEngine.UI
             if (_editId != null) _editBuf += e.AsString;
         }
 
-        // ═════════════════════════════════════════════════════════════════════
+        // ═══════════════════════════════════════════════════════════════════════
         //  Actions
-        // ═════════════════════════════════════════════════════════════════════
+        // ═══════════════════════════════════════════════════════════════════════
         private void TryCreate()
         {
-            _newError = _newSuccess = null;
+            _newError = _newOk = null;
             if (string.IsNullOrWhiteSpace(_newName))
             { _newError = "Project name cannot be empty."; return; }
-            if (string.IsNullOrWhiteSpace(_newPath))
-            { _newError = "Save location cannot be empty."; return; }
 
-            string final = _newPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            // Always put the project in its own named subfolder
+            string baseDir = ProjectManager.DefaultProjectsDirectory;
+            string final = _newPath.TrimEnd(Path.DirectorySeparatorChar,
+                                               Path.AltDirectorySeparatorChar);
+
+            // If the user hasn't changed the path, ensure it includes the project name
             if (!Path.GetFileName(final).Equals(_newName, StringComparison.OrdinalIgnoreCase))
-                final = Path.Combine(final, _newName);
+                final = Path.Combine(string.IsNullOrWhiteSpace(_newPath) ? baseDir : final, _newName);
 
-            if (Directory.Exists(final) && Directory.GetFileSystemEntries(final).Length > 0)
-            { _newError = "Directory already exists and is not empty."; return; }
+            if (Directory.Exists(final) &&
+                Directory.GetFileSystemEntries(final).Length > 0 &&
+                !File.Exists(Path.Combine(final, "project.elintria")))
+            { _newError = "Directory exists and is not empty."; return; }
 
             var m = ProjectManager.CreateProject(_newName, final, _newType, _newDesc);
             if (m == null) { _newError = "Failed to create project. Check the path."; return; }
 
-            _newSuccess = $"Created at {final}";
+            _newOk = $"Created: {final}";
+            _newName = "MyProject";
+            _newPath = Path.Combine(ProjectManager.DefaultProjectsDirectory, _newName);
+            _newDesc = "";
             Refresh();
             _selected = m;
             _mode = RightMode.ProjectInfo;
@@ -522,37 +681,28 @@ namespace ElintriaEngine.UI
             if (opened != null) ProjectOpened?.Invoke(opened.RootPath);
         }
 
-        private void OpenFromDisk()
+        private void ScanAndRefresh()
         {
-            string dir = ProjectManager.DefaultProjectsDirectory;
-            if (!Directory.Exists(dir)) return;
-            foreach (var mf in Directory.GetFiles(dir, "project.elintria", SearchOption.AllDirectories))
-                ProjectManager.ImportProject(mf);
+            int found = ProjectManager.ScanFolderForProjects(ProjectManager.DefaultProjectsDirectory);
             Refresh();
+            if (found == 0) Console.WriteLine("[Launcher] No new projects found during scan.");
         }
 
         private void BrowseFolder()
         {
-            _newPath = Path.Combine(ProjectManager.DefaultProjectsDirectory,
-                string.IsNullOrWhiteSpace(_newName) ? "NewProject" : _newName);
+            string name = string.IsNullOrWhiteSpace(_newName) ? "NewProject" : _newName;
+            _newPath = Path.Combine(ProjectManager.DefaultProjectsDirectory, name);
         }
 
         // ── Edit helpers ──────────────────────────────────────────────────────
         private void StartEdit(string id, string initial, Action<string> commit)
-        {
-            _editId = id; _editBuf = initial; _editCommit = commit;
-        }
+        { _editId = id; _editBuf = initial; _editCommit = commit; }
 
         private void CommitEdit()
-        {
-            _editCommit?.Invoke(_editBuf);
-            _editId = null;
-        }
+        { _editCommit?.Invoke(_editBuf); _editId = null; }
 
-        private void CommitIfNotSelf(string? keepId)
-        {
-            if (_editId != null && _editId != keepId) CommitEdit();
-        }
+        private void CommitIfActive(string? keepId)
+        { if (_editId != null && _editId != keepId) CommitEdit(); }
 
         // ── Formatting ────────────────────────────────────────────────────────
         private static string RelDate(DateTime dt)
@@ -568,7 +718,10 @@ namespace ElintriaEngine.UI
         private static string TruncPath(string p, int max)
             => p.Length <= max ? p : "…" + p[^(max - 1)..];
 
-        private static Color Lighten(Color c)
-            => Color.FromArgb(c.A, Math.Min(255, c.R + 18), Math.Min(255, c.G + 18), Math.Min(255, c.B + 18));
+        private static Color Lighten(Color c) =>
+            Color.FromArgb(c.A,
+                Math.Min(255, c.R + 18),
+                Math.Min(255, c.G + 18),
+                Math.Min(255, c.B + 18));
     }
 }

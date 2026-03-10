@@ -26,6 +26,10 @@ namespace ElintriaEngine.UI.Panels
         // Fields rendered this frame (rebuilt each render)
         private readonly List<FieldRecord> _fields = new();
 
+        // Track which script types were visible last frame.
+        // If the type set changes (new compile), Inspect() is called automatically.
+        private readonly Dictionary<string, bool> _knownScriptTypes = new();
+
         // Active text edit
         private string? _editId;
         private string _editBuf = "";
@@ -150,45 +154,72 @@ namespace ElintriaEngine.UI.Panels
         {
             string cid = "c" + comp.GetHashCode();
 
-            // ── DynamicScript: look up the real type every frame and show its fields ──
+            // ── DynamicScript placeholder — shows fields from compiled type ─────────
             if (comp is Core.DynamicScript ds)
             {
                 DrawSectionHeader(r, cr, ds.ScriptTypeName, () => _target?.RemoveComponent(comp), ref y);
                 DrawBoolField(r, cr, "Enabled", comp.Enabled, ref y, cid + "_en", v => comp.Enabled = v);
 
                 var realType = Core.ComponentRegistry.TryGetType(ds.ScriptTypeName);
+
+                // Track whether the type was available last frame.
+                // If this changes (newly compiled) we re-scroll to top so new fields are visible.
+                bool wasKnown = _knownScriptTypes.TryGetValue(ds.ScriptTypeName, out bool prev) && prev;
+                bool isKnown = realType != null;
+                _knownScriptTypes[ds.ScriptTypeName] = isKnown;
+                if (isKnown && !wasKnown)
+                    ScrollOffset = 0;   // jump to top so new fields are visible
+
                 if (realType != null)
                 {
-                    var skipNames = new System.Collections.Generic.HashSet<string>(
+                    var skipNames = new HashSet<string>(
                         typeof(Core.Component)
                             .GetFields(BindingFlags.Public | BindingFlags.Instance | BindingFlags.FlattenHierarchy)
                             .Select(f => f.Name));
 
+                    bool hasFields = false;
                     foreach (var fi in realType.GetFields(
                         BindingFlags.Public | BindingFlags.Instance | BindingFlags.FlattenHierarchy))
                     {
                         if (skipNames.Contains(fi.Name)) continue;
+                        hasFields = true;
 
-                        // Capture loop variable explicitly so each closure has its own copy
+                        // Capture loop variable so each closure has its own copy
                         var fieldInfo = fi;
                         var fieldName = fi.Name;
                         Type fieldType = fi.FieldType;
 
-                        // Read stored value from FieldValues dict; fall back to default
+                        // Read from FieldValues dict (editor storage), coerce to the right type
                         ds.FieldValues.TryGetValue(fieldName, out var stored);
                         object? display = CoerceToType(stored, fieldType) ?? GetDefault(fieldType);
 
                         DrawAnyField(r, cr, fieldName, display, fieldType,
                             cid + "_ds_" + fieldName, ref y,
-                            newVal => ds.FieldValues[fieldName] = newVal);
+                            newVal =>
+                            {
+                                // Store in FieldValues — copied to the real instance on play
+                                ds.FieldValues[fieldName] = newVal;
+                            });
+                    }
+
+                    if (!hasFields)
+                    {
+                        r.DrawText("No public fields.",
+                            new PointF(cr.X + PAD, y + 3f), Color.FromArgb(255, 120, 120, 120), 9f);
+                        y += 18f; ContentHeight += 18f;
                     }
                 }
                 else
                 {
+                    // Script not yet compiled — show a hint
                     float lx = cr.X + PAD;
-                    r.DrawText("(script not compiled yet)",
-                        new PointF(lx, y + 3f), Color.FromArgb(255, 130, 130, 130), 10f);
-                    y += 18f; ContentHeight += 18f;
+                    r.FillRect(new RectangleF(lx, y, cr.Width - PAD * 2, 34f),
+                        Color.FromArgb(30, 200, 160, 40));
+                    r.DrawText("⚙  Script not compiled yet.", new PointF(lx + 6f, y + 4f),
+                        Color.FromArgb(255, 190, 150, 40), 9f);
+                    r.DrawText("Save your script file to trigger auto-compile.",
+                        new PointF(lx + 6f, y + 17f), Color.FromArgb(255, 130, 130, 130), 8f);
+                    y += 40f; ContentHeight += 40f;
                 }
 
                 r.DrawLine(new PointF(cr.X, y), new PointF(cr.Right, y), Color.FromArgb(255, 50, 50, 50));

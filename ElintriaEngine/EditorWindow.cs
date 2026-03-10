@@ -15,9 +15,9 @@ namespace ElintriaEngine
     ///
     /// Lifecycle
     /// ---------
-    ///  1. OnLoad  - creates EditorRenderer, shows the Project Launcher.
-    ///  2. User clicks "Open Project" in the launcher -> LoadEditor(projectRoot).
-    ///  3. User clicks File -> Return to Launcher -> UnloadEditor() then back to step 1.
+    ///  1. OnLoad  — ALWAYS shows the Project Launcher first.
+    ///  2. User clicks "Open Project" -> LoadEditor(projectRoot).
+    ///  3. File -> Return to Launcher -> back to step 1.
     ///
     /// Render path
     /// -----------
@@ -32,13 +32,9 @@ namespace ElintriaEngine
         private string? _pendingProjectRoot;
         private int _lastW = -1, _lastH = -1;
 
-        public EditorWindow(GameWindowSettings gs, NativeWindowSettings ns,
-                            string projectRoot = "")
-            : base(gs, ns)
-        {
-            if (!string.IsNullOrEmpty(projectRoot))
-                _pendingProjectRoot = projectRoot;
-        }
+        // Constructor takes no projectRoot — the launcher is always shown first.
+        public EditorWindow(GameWindowSettings gs, NativeWindowSettings ns)
+            : base(gs, ns) { }
 
         protected override void OnLoad()
         {
@@ -55,15 +51,8 @@ namespace ElintriaEngine
             _lastW = w; _lastH = h;
             GL.Viewport(0, 0, w, h);
 
-            if (_pendingProjectRoot != null)
-            {
-                LoadEditor(_pendingProjectRoot);
-                _pendingProjectRoot = null;
-            }
-            else
-            {
-                ShowLauncher();
-            }
+            // Always start with the project launcher — no bypass.
+            ShowLauncher();
         }
 
         protected override void OnUnload()

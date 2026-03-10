@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.Loader;
 
 namespace ElintriaEngine.Core
 {
@@ -286,6 +287,12 @@ namespace ElintriaEngine.Core
             return resolved;
         }
 
+        // Keeps the most recently created ScriptLoadContext alive so its types
+        // remain valid for the lifetime of the editor session.
+        // A new context is created on every recompile, allowing the same assembly
+        // name ("GameScripts") to be loaded multiple times without conflict.
+        private static ScriptLoadContext? _scriptContext;
+
         public static void LoadUserScripts(string projectRoot = "")
         {
             // Locate the compiled GameScripts.dll
@@ -298,7 +305,6 @@ namespace ElintriaEngine.Core
             foreach (var c in candidates)
             {
                 if (File.Exists(c)) { dllPath = c; break; }
-                Console.WriteLine($"[ECS] Not found: {c}");
             }
 
             if (dllPath == null)
@@ -310,22 +316,17 @@ namespace ElintriaEngine.Core
             Console.WriteLine($"[ECS] Loading scripts from: {dllPath}");
             try
             {
-                // Copy to a unique temp path on every load.
-                // Assembly.LoadFrom caches by file path, so using a unique name
-                // guarantees a fresh load each play session without needing a
-                // custom AssemblyLoadContext (which has type-identity pitfalls).
-                string tempDir = Path.Combine(Path.GetTempPath(), "ElintriaScripts");
-                Directory.CreateDirectory(tempDir);
+                // Each recompile gets its own isolated AssemblyLoadContext so the
+                // runtime never complains "assembly with same name is already loaded".
+                // We keep a reference to the previous context alive long enough for
+                // any in-progress editor frames to finish, then let it be GC'd.
+                var newContext = new ScriptLoadContext(dllPath);
+                var asm = newContext.LoadFromAssemblyPath(dllPath);
 
-                // Clean up old temp copies (best-effort, ignore failures)
-                foreach (var old in Directory.GetFiles(tempDir, "GameScripts_*.dll"))
-                    try { File.Delete(old); } catch { }
+                // Replace the old context — previous one will be collected eventually
+                _scriptContext = newContext;
 
-                string sessionDll = Path.Combine(tempDir, $"GameScripts_{Guid.NewGuid():N}.dll");
-                File.Copy(dllPath, sessionDll);
-
-                var asm = Assembly.LoadFrom(sessionDll);
-                ComponentRegistry.UserAssembly = asm;  // expose latest assembly for UI editor reflection
+                ComponentRegistry.UserAssembly = asm;
                 int count = 0;
                 foreach (var type in asm.GetExportedTypes())
                 {
@@ -340,7 +341,7 @@ namespace ElintriaEngine.Core
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ECS] Failed to load GameScripts.dll: {ex}");
+                Console.WriteLine($"[ECS] Failed to load GameScripts.dll: {ex.Message}");
             }
         }
 
@@ -425,5 +426,51 @@ namespace ElintriaEngine.Core
         }
 
         public void Dispose() => Stop();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  ScriptLoadContext
+    //  An isolated AssemblyLoadContext that lets the editor load a new build of
+    //  GameScripts.dll on every recompile without hitting the "assembly with the
+    //  same name is already loaded" exception.
+    //
+    //  Resolution strategy
+    //  ───────────────────
+    //  1. The script DLL itself  → loaded directly from the given path.
+    //  2. ElintriaEngine.dll and all .NET / OpenTK types → delegated to the
+    //     default context so that Component, GameObject etc. share one identity.
+    // ─────────────────────────────────────────────────────────────────────────
+    internal sealed class ScriptLoadContext : AssemblyLoadContext
+    {
+        private readonly AssemblyDependencyResolver _resolver;
+
+        public ScriptLoadContext(string dllPath)
+            // isCollectible: false keeps the context (and its types) alive for
+            // the whole session; we just replace the reference each reload.
+            : base(name: "ScriptContext_" + Guid.NewGuid().ToString("N")[..8],
+                   isCollectible: false)
+        {
+            _resolver = new AssemblyDependencyResolver(dllPath);
+        }
+
+        protected override Assembly? Load(AssemblyName assemblyName)
+        {
+            // Always delegate engine + framework assemblies to the default context
+            // so that 'type is Component' checks work across reloads.
+            string? name = assemblyName.Name;
+            if (name == null) return null;
+            if (name == "ElintriaEngine" ||
+                name.StartsWith("System") ||
+                name.StartsWith("Microsoft") ||
+                name.StartsWith("OpenTK") ||
+                name.StartsWith("netstandard") ||
+                name.StartsWith("mscorlib") ||
+                name.StartsWith("Newtonsoft"))
+                return null;  // null → fall through to default context
+
+            // Resolve script-side dependencies (e.g. helper DLLs they reference)
+            string? resolved = _resolver.ResolveAssemblyToPath(assemblyName);
+            return resolved != null ? LoadFromAssemblyPath(resolved) : null;
+        }
     }
 }

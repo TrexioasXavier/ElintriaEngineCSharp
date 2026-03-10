@@ -810,23 +810,33 @@ namespace ElintriaEngine.Build
             r.DrawRect(logRect, ColBorder);
             r.PushClip(logRect);
 
+            const float LogFontSize = 9f;
+            const float LogCharWidth = 6.2f;   // approximate width per char at 9pt
+            const float LogLineH = 14f;
+            const float LogPadX = 4f;
+            float logUsableW = logRect.Width - LogPadX * 2f;
+            int charsPerLine = Math.Max(10, (int)(logUsableW / LogCharWidth));
+
             float ly = logRect.Y + 2f - ScrollOffset;
             for (int i = 0; i < _log.Count; i++)
             {
                 var entry = _log[i];
-
-                if (ly + 14f > logRect.Y && ly < logRect.Bottom)
+                Color tc = entry.Level switch
                 {
-                    Color tc = entry.Level switch
-                    {
-                        LogLevel.Error => CLogError,
-                        LogLevel.Warning => CLogWarning,
-                        LogLevel.Success => CLogSuccess,
-                        _ => CLogInfo,
-                    };
-                    r.DrawText(entry.Message, new PointF(logRect.X + 4f, ly), tc, 9f);
+                    LogLevel.Error => CLogError,
+                    LogLevel.Warning => CLogWarning,
+                    LogLevel.Success => CLogSuccess,
+                    _ => CLogInfo,
+                };
+
+                // Word-wrap the message into lines that fit inside the panel
+                var lines = WrapText(entry.Message, charsPerLine);
+                foreach (var line in lines)
+                {
+                    if (ly + LogLineH > logRect.Y && ly < logRect.Bottom)
+                        r.DrawText(line, new PointF(logRect.X + LogPadX, ly), tc, LogFontSize);
+                    ly += LogLineH;
                 }
-                ly += 15f;
             }
             ContentHeight = (ly + ScrollOffset) - y + 4f;
 
@@ -836,6 +846,35 @@ namespace ElintriaEngine.Build
         }
 
         // ── Field drawing helpers ───────────────────────────────────────────────
+        // ── Text wrap helper ───────────────────────────────────────────────────
+        private static List<string> WrapText(string text, int charsPerLine)
+        {
+            var lines = new List<string>();
+            if (string.IsNullOrEmpty(text)) { lines.Add(""); return lines; }
+
+            // Split on explicit newlines first
+            foreach (var rawLine in text.Split('\n'))
+            {
+                string remaining = rawLine.TrimEnd('\r');
+                if (remaining.Length == 0) { lines.Add(""); continue; }
+
+                while (remaining.Length > charsPerLine)
+                {
+                    // Try to break at a space near the limit
+                    int breakAt = charsPerLine;
+                    for (int k = charsPerLine; k >= charsPerLine / 2; k--)
+                    {
+                        if (k < remaining.Length && remaining[k] == ' ')
+                        { breakAt = k; break; }
+                    }
+                    lines.Add(remaining[..breakAt].TrimEnd());
+                    remaining = remaining[breakAt..].TrimStart();
+                }
+                if (remaining.Length > 0) lines.Add(remaining);
+            }
+            return lines;
+        }
+
         private void DrawTextField(IEditorRenderer r, float lx, ref float y, float fw,
             string label, string id, string value, Action<string> setter)
         {

@@ -12,6 +12,21 @@ namespace ElintriaEngine.Core
     public enum ProjectType { TwoD, ThreeD }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    //  EngineSettings  – user prefs stored in AppData/ElintriaEngine/settings.json
+    // ═══════════════════════════════════════════════════════════════════════════
+    public class EngineSettings
+    {
+        /// <summary>Root folder under which every new project lives in its own subfolder.</summary>
+        public string DefaultProjectsDirectory { get; set; } = "";
+
+        /// <summary>Auto-scan the default folder each time the launcher opens.</summary>
+        public bool AutoScanOnStartup { get; set; } = true;
+
+        public int WindowWidth { get; set; } = 1600;
+        public int WindowHeight { get; set; } = 900;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     //  ProjectManifest  –  written as project.elintria in the project root
     // ═══════════════════════════════════════════════════════════════════════════
     public class ProjectManifest
@@ -23,22 +38,14 @@ namespace ElintriaEngine.Core
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime LastOpenedAt { get; set; } = DateTime.UtcNow;
 
-        // Absolute path to the folder that contains this file
-        [JsonIgnore]
-        public string RootPath { get; set; } = "";
-
-        [JsonIgnore]
-        public string ManifestPath => Path.Combine(RootPath, "project.elintria");
-
-        // Convenience thumbnails of what's inside
-        [JsonIgnore]
-        public int SceneCount { get; set; }
-        [JsonIgnore]
-        public int ScriptCount { get; set; }
+        [JsonIgnore] public string RootPath { get; set; } = "";
+        [JsonIgnore] public string ManifestPath => Path.Combine(RootPath, "project.elintria");
+        [JsonIgnore] public int SceneCount { get; set; }
+        [JsonIgnore] public int ScriptCount { get; set; }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    //  ProjectRegistry  –  the list of all known projects, stored in AppData
+    //  ProjectRegistry  –  list of all known projects, stored in AppData
     // ═══════════════════════════════════════════════════════════════════════════
     public class ProjectRegistry
     {
@@ -54,11 +61,11 @@ namespace ElintriaEngine.Core
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    //  ProjectManager  –  static API for all project operations
+    //  ProjectManager  –  static API for all project + settings operations
     // ═══════════════════════════════════════════════════════════════════════════
     public static class ProjectManager
     {
-        // ── Paths ─────────────────────────────────────────────────────────────
+        // ── AppData paths ─────────────────────────────────────────────────────
         private static string AppDataDir =>
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                          "ElintriaEngine");
@@ -66,11 +73,71 @@ namespace ElintriaEngine.Core
         private static string RegistryPath =>
             Path.Combine(AppDataDir, "projects.json");
 
-        private static readonly JsonSerializerOptions _jsonOpts = new()
+        private static string SettingsPath =>
+            Path.Combine(AppDataDir, "settings.json");
+
+        private static readonly JsonSerializerOptions _opts = new()
         {
             WriteIndented = true,
             Converters = { new JsonStringEnumConverter() },
         };
+
+        // ── Settings ──────────────────────────────────────────────────────────
+        private static EngineSettings? _settingsCache;
+
+        public static EngineSettings LoadSettings()
+        {
+            if (_settingsCache != null) return _settingsCache;
+            try
+            {
+                if (File.Exists(SettingsPath))
+                {
+                    var s = JsonSerializer.Deserialize<EngineSettings>(
+                                File.ReadAllText(SettingsPath), _opts);
+                    if (s != null) { _settingsCache = s; return s; }
+                }
+            }
+            catch (Exception ex) { Console.WriteLine($"[PM] Settings load: {ex.Message}"); }
+
+            // First run – create defaults
+            _settingsCache = new EngineSettings
+            {
+                DefaultProjectsDirectory = FallbackProjectsDir,
+            };
+            SaveSettings(_settingsCache);
+            return _settingsCache;
+        }
+
+        public static void SaveSettings(EngineSettings s)
+        {
+            _settingsCache = s;
+            try
+            {
+                Directory.CreateDirectory(AppDataDir);
+                File.WriteAllText(SettingsPath, JsonSerializer.Serialize(s, _opts));
+            }
+            catch (Exception ex) { Console.WriteLine($"[PM] Settings save: {ex.Message}"); }
+        }
+
+        /// <summary>The current effective default projects root folder.</summary>
+        public static string DefaultProjectsDirectory
+        {
+            get
+            {
+                var dir = LoadSettings().DefaultProjectsDirectory;
+                return string.IsNullOrWhiteSpace(dir) ? FallbackProjectsDir : dir;
+            }
+            set
+            {
+                var s = LoadSettings();
+                s.DefaultProjectsDirectory = value;
+                SaveSettings(s);
+            }
+        }
+
+        private static string FallbackProjectsDir =>
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                         "ElintriaProjects");
 
         // ── Registry ──────────────────────────────────────────────────────────
         public static ProjectRegistry LoadRegistry()
@@ -78,16 +145,11 @@ namespace ElintriaEngine.Core
             try
             {
                 if (File.Exists(RegistryPath))
-                {
-                    var json = File.ReadAllText(RegistryPath);
-                    return JsonSerializer.Deserialize<ProjectRegistry>(json, _jsonOpts)
+                    return JsonSerializer.Deserialize<ProjectRegistry>(
+                               File.ReadAllText(RegistryPath), _opts)
                            ?? new ProjectRegistry();
-                }
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[PM] Registry load error: {ex.Message}");
-            }
+            catch (Exception ex) { Console.WriteLine($"[PM] Registry load: {ex.Message}"); }
             return new ProjectRegistry();
         }
 
@@ -96,18 +158,11 @@ namespace ElintriaEngine.Core
             try
             {
                 Directory.CreateDirectory(AppDataDir);
-                File.WriteAllText(RegistryPath, JsonSerializer.Serialize(reg, _jsonOpts));
+                File.WriteAllText(RegistryPath, JsonSerializer.Serialize(reg, _opts));
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[PM] Registry save error: {ex.Message}");
-            }
+            catch (Exception ex) { Console.WriteLine($"[PM] Registry save: {ex.Message}"); }
         }
 
-        /// <summary>
-        /// Returns all projects in the registry whose manifest files actually exist,
-        /// ordered by most-recently-opened first.
-        /// </summary>
         public static List<ProjectManifest> GetRecentProjects()
         {
             var reg = LoadRegistry();
@@ -116,13 +171,10 @@ namespace ElintriaEngine.Core
             foreach (var entry in reg.Projects)
             {
                 if (!File.Exists(entry.ManifestPath)) continue;
-
-                var manifest = LoadManifest(entry.ManifestPath);
-                if (manifest == null) continue;
-
-                // Populate runtime-only stats
-                RefreshStats(manifest);
-                results.Add(manifest);
+                var m = LoadManifest(entry.ManifestPath);
+                if (m == null) continue;
+                RefreshStats(m);
+                results.Add(m);
             }
 
             results.Sort((a, b) => b.LastOpenedAt.CompareTo(a.LastOpenedAt));
@@ -132,10 +184,7 @@ namespace ElintriaEngine.Core
         private static void RegisterProject(ProjectManifest manifest)
         {
             var reg = LoadRegistry();
-
-            // Remove stale entry for the same path (if any)
             reg.Projects.RemoveAll(e => e.ManifestPath == manifest.ManifestPath);
-
             reg.Projects.Insert(0, new ProjectRegistryEntry
             {
                 ManifestPath = manifest.ManifestPath,
@@ -143,7 +192,6 @@ namespace ElintriaEngine.Core
                 Type = manifest.Type,
                 LastOpenedAt = manifest.LastOpenedAt,
             });
-
             SaveRegistry(reg);
         }
 
@@ -159,11 +207,11 @@ namespace ElintriaEngine.Core
         {
             try
             {
-                var json = File.ReadAllText(manifestPath);
-                var manifest = JsonSerializer.Deserialize<ProjectManifest>(json, _jsonOpts);
-                if (manifest == null) return null;
-                manifest.RootPath = Path.GetDirectoryName(manifestPath)!;
-                return manifest;
+                var m = JsonSerializer.Deserialize<ProjectManifest>(
+                            File.ReadAllText(manifestPath), _opts);
+                if (m == null) return null;
+                m.RootPath = Path.GetDirectoryName(manifestPath)!;
+                return m;
             }
             catch (Exception ex)
             {
@@ -174,35 +222,27 @@ namespace ElintriaEngine.Core
 
         public static void SaveManifest(ProjectManifest manifest)
         {
-            try
-            {
-                var json = JsonSerializer.Serialize(manifest, _jsonOpts);
-                File.WriteAllText(manifest.ManifestPath, json);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[PM] Manifest save error: {ex.Message}");
-            }
+            try { File.WriteAllText(manifest.ManifestPath, JsonSerializer.Serialize(manifest, _opts)); }
+            catch (Exception ex) { Console.WriteLine($"[PM] Manifest save: {ex.Message}"); }
         }
 
         // ── Create ────────────────────────────────────────────────────────────
         /// <summary>
-        /// Creates a new project at <paramref name="rootPath"/>.
-        /// Returns the manifest on success, null on failure.
+        /// Creates a new project at rootPath (always a subfolder named after the project
+        /// inside DefaultProjectsDirectory if rootPath isn't explicitly overridden).
         /// </summary>
         public static ProjectManifest? CreateProject(string name, string rootPath,
-                                                     ProjectType type,
-                                                     string description = "")
+                                                     ProjectType type, string description = "")
         {
             try
             {
                 if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(rootPath))
                     return null;
 
-                // Create the project root directory
+                // Always place the project inside its own named subfolder
+                // e.g. rootPath = /Projects/MyGame  (caller already includes the name)
                 Directory.CreateDirectory(rootPath);
 
-                // Create the standard folder structure
                 foreach (var sub in new[]
                 {
                     "Assets",
@@ -216,21 +256,16 @@ namespace ElintriaEngine.Core
                     Path.Combine("Assets", "Fonts"),
                     ".elintria",
                 })
-                {
                     Directory.CreateDirectory(Path.Combine(rootPath, sub));
-                }
 
-                // Write a README inside Assets
                 File.WriteAllText(Path.Combine(rootPath, "Assets", "README.txt"),
                     $"Elintria Engine project: {name}\n" +
                     $"Type: {(type == ProjectType.TwoD ? "2D" : "3D")}\n" +
                     $"Created: {DateTime.UtcNow:O}\n");
 
-                // Write a default gitignore
                 File.WriteAllText(Path.Combine(rootPath, ".gitignore"),
                     ".elintria/\nBuild/\n*.user\n");
 
-                // Write the manifest
                 var manifest = new ProjectManifest
                 {
                     Name = name,
@@ -255,34 +290,24 @@ namespace ElintriaEngine.Core
         }
 
         // ── Open ──────────────────────────────────────────────────────────────
-        /// <summary>
-        /// Marks a project as recently opened and returns its manifest.
-        /// </summary>
         public static ProjectManifest? OpenProject(string manifestPath)
         {
             var manifest = LoadManifest(manifestPath);
             if (manifest == null) return null;
-
             manifest.LastOpenedAt = DateTime.UtcNow;
             SaveManifest(manifest);
             RegisterProject(manifest);
             return manifest;
         }
 
-        // ── Delete ────────────────────────────────────────────────────────────
-        /// <summary>
-        /// Permanently deletes a project folder and removes it from the registry.
-        /// Returns true on success.
-        /// </summary>
+        // ── Delete / Remove ───────────────────────────────────────────────────
         public static bool DeleteProject(ProjectManifest manifest, bool deleteFiles = true)
         {
             try
             {
                 UnregisterProject(manifest.ManifestPath);
-
                 if (deleteFiles && Directory.Exists(manifest.RootPath))
                     Directory.Delete(manifest.RootPath, recursive: true);
-
                 Console.WriteLine($"[PM] Deleted project '{manifest.Name}'");
                 return true;
             }
@@ -293,24 +318,56 @@ namespace ElintriaEngine.Core
             }
         }
 
-        /// <summary>
-        /// Removes a project from the launcher list without deleting files.
-        /// </summary>
-        public static void RemoveFromRegistry(ProjectManifest manifest)
-        {
+        public static void RemoveFromRegistry(ProjectManifest manifest) =>
             UnregisterProject(manifest.ManifestPath);
-        }
 
-        // ── Import existing project ───────────────────────────────────────────
-        /// <summary>
-        /// Adds an existing project (by its manifest path) to the registry.
-        /// </summary>
+        // ── Import / Scan ─────────────────────────────────────────────────────
         public static ProjectManifest? ImportProject(string manifestPath)
         {
             var manifest = LoadManifest(manifestPath);
             if (manifest == null) return null;
             RegisterProject(manifest);
             return manifest;
+        }
+
+        /// <summary>
+        /// Scans <paramref name="folder"/> (one level deep) for project.elintria files
+        /// and registers any that aren't already known. Returns how many were added.
+        /// </summary>
+        public static int ScanFolderForProjects(string folder)
+        {
+            if (!Directory.Exists(folder)) return 0;
+            int found = 0;
+            var reg = LoadRegistry();
+            var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var e in reg.Projects) known.Add(e.ManifestPath);
+
+            // Check root itself
+            string rootManifest = Path.Combine(folder, "project.elintria");
+            if (File.Exists(rootManifest) && !known.Contains(rootManifest))
+            {
+                ImportProject(rootManifest);
+                found++;
+            }
+
+            // Check one level of subdirectories (each project is in its own folder)
+            try
+            {
+                foreach (var sub in Directory.GetDirectories(folder))
+                {
+                    string mf = Path.Combine(sub, "project.elintria");
+                    if (File.Exists(mf) && !known.Contains(mf))
+                    {
+                        ImportProject(mf);
+                        found++;
+                    }
+                }
+            }
+            catch { /* best-effort */ }
+
+            if (found > 0)
+                Console.WriteLine($"[PM] Auto-scan found {found} new project(s) in {folder}");
+            return found;
         }
 
         // ── Utilities ─────────────────────────────────────────────────────────
@@ -322,16 +379,12 @@ namespace ElintriaEngine.Core
                 if (Directory.Exists(assets))
                 {
                     manifest.SceneCount = Directory.GetFiles(assets, "*.scene",
-                                              SearchOption.AllDirectories).Length;
+                                               SearchOption.AllDirectories).Length;
                     manifest.ScriptCount = Directory.GetFiles(assets, "*.cs",
-                                              SearchOption.AllDirectories).Length;
+                                               SearchOption.AllDirectories).Length;
                 }
             }
-            catch { /* best-effort */ }
+            catch { }
         }
-
-        public static string DefaultProjectsDirectory =>
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-                         "ElintriaProjects");
     }
 }

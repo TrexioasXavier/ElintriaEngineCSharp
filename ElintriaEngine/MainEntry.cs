@@ -9,6 +9,5 @@ var native = new NativeWindowSettings
     APIVersion = new Version(3, 3),
     Profile = ContextProfile.Core,
 };
-using var win = new EditorWindow(GameWindowSettings.Default, native,
-    projectRoot: @"C:\MyGameProject");
+using var win = new EditorWindow(GameWindowSettings.Default, native);
 win.Run();
