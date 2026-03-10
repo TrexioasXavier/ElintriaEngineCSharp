@@ -253,80 +253,118 @@ namespace ElintriaEngine.Core
         //  the live editor scene with real component instances.
         //  Returns the number of scripts successfully resolved.
         // ─────────────────────────────────────────────────────────────────────
+        // Assembly of built-in engine components — user scripts are in a different assembly.
+        private static readonly System.Reflection.Assembly _engineAsm =
+            typeof(Component).Assembly;
+
+        /// <summary>
+        /// Replace every DynamicScript placeholder AND every stale real-component instance
+        /// (from a previous compile) with a fresh instance from the current UserAssembly.
+        /// Field values are copied across so the user keeps their edits.
+        /// Call this after every successful script compile.
+        /// </summary>
         public static int ResolveEditorScripts(Scene scene)
         {
             int resolved = 0;
+            var userAsm = ComponentRegistry.UserAssembly;
+
             foreach (var go in scene.All())
             {
                 for (int i = go.Components.Count - 1; i >= 0; i--)
                 {
-                    if (go.Components[i] is not DynamicScript ds) continue;
+                    var comp = go.Components[i];
+                    string? typeName = null;
+                    bool wasEnabled = comp.Enabled;
+                    Dictionary<string, object?>? savedValues = null;
 
-                    var real = ComponentRegistry.Create(ds.ScriptTypeName);
-                    if (real == null) continue;
-
-                    real.Enabled = ds.Enabled;
-                    real.GameObject = go;
-
-                    // Copy any values the user edited in the Inspector while
-                    // the script was still a DynamicScript placeholder
-                    foreach (var kv in ds.FieldValues)
+                    if (comp is DynamicScript ds)
                     {
-                        var fi = real.GetType().GetField(kv.Key,
-                            BindingFlags.Public | BindingFlags.Instance);
-                        if (fi != null && kv.Value != null)
-                            try { fi.SetValue(real, Convert.ChangeType(kv.Value, fi.FieldType)); }
-                            catch { }
+                        // Case 1: placeholder waiting for first compile
+                        typeName = ds.ScriptTypeName;
+                        savedValues = ds.FieldValues;
+                    }
+                    else if (userAsm != null
+                             && comp.GetType().Assembly != _engineAsm
+                             && comp.GetType().Assembly != userAsm)
+                    {
+                        // Case 2: real component from a PREVIOUS compile's assembly.
+                        // The user has added new fields since then — replace with fresh instance.
+                        typeName = comp.GetType().Name;
+                        savedValues = CaptureFieldValues(comp);
                     }
 
-                    go.Components[i] = real;
+                    if (typeName == null) continue;
+
+                    var fresh = ComponentRegistry.Create(typeName);
+                    if (fresh == null) continue;
+
+                    fresh.Enabled = wasEnabled;
+                    fresh.GameObject = go;
+
+                    if (savedValues != null)
+                        ApplyFieldValues(fresh, savedValues);
+
+                    go.Components[i] = fresh;
                     resolved++;
-                    Console.WriteLine($"[Editor] Resolved '{ds.ScriptTypeName}' on '{go.Name}'");
+                    Console.WriteLine($"[Editor] Resolved '{typeName}' on '{go.Name}'");
                 }
             }
             return resolved;
         }
 
-        // Keeps the most recently created ScriptLoadContext alive so its types
-        // remain valid for the lifetime of the editor session.
-        // A new context is created on every recompile, allowing the same assembly
-        // name ("GameScripts") to be loaded multiple times without conflict.
-        private static ScriptLoadContext? _scriptContext;
+        /// Reads all public instance fields of a component into a string→value dict.
+        private static Dictionary<string, object?> CaptureFieldValues(Component comp)
+        {
+            var dict = new Dictionary<string, object?>();
+            foreach (var fi in comp.GetType().GetFields(
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.FlattenHierarchy))
+            {
+                try { dict[fi.Name] = fi.GetValue(comp); } catch { }
+            }
+            return dict;
+        }
+
+        /// Writes saved values into a freshly-created component instance, coercing types as needed.
+        private static void ApplyFieldValues(Component target,
+                                             Dictionary<string, object?> values)
+        {
+            foreach (var kv in values)
+            {
+                var fi = target.GetType().GetField(kv.Key,
+                    BindingFlags.Public | BindingFlags.Instance);
+                if (fi == null || kv.Value == null) continue;
+                try { fi.SetValue(target, Convert.ChangeType(kv.Value, fi.FieldType)); }
+                catch { }
+            }
+        }
 
         public static void LoadUserScripts(string projectRoot = "")
         {
-            // Locate the compiled GameScripts.dll
-            var candidates = new List<string>();
-            if (!string.IsNullOrEmpty(projectRoot))
-                candidates.Add(Path.Combine(projectRoot, ".elintria", "Scripts", "bin", "GameScripts.dll"));
-            candidates.Add(Path.Combine(AppContext.BaseDirectory, "GameScripts.dll"));
+            // Look for the newest GameScripts_<timestamp>.dll in the project bin folder.
+            // Every compile produces a uniquely-named DLL (unique AssemblyName) so
+            // Assembly.LoadFrom() never conflicts — no AssemblyLoadContext needed.
+            string binDir = string.IsNullOrEmpty(projectRoot)
+                ? AppContext.BaseDirectory
+                : Path.Combine(projectRoot, ".elintria", "Scripts", "bin");
 
-            string? dllPath = null;
-            foreach (var c in candidates)
-            {
-                if (File.Exists(c)) { dllPath = c; break; }
-            }
+            string? dllPath = FindNewestScriptsDll(binDir);
+
+            // Fallback for built-game scenario: DLL next to the exe
+            if (dllPath == null)
+                dllPath = FindNewestScriptsDll(AppContext.BaseDirectory);
 
             if (dllPath == null)
             {
-                Console.WriteLine("[ECS] No GameScripts.dll found — user scripts will not run.");
+                Console.WriteLine("[ECS] No GameScripts DLL found — scripts not yet compiled.");
                 return;
             }
 
-            Console.WriteLine($"[ECS] Loading scripts from: {dllPath}");
+            Console.WriteLine($"[ECS] Loading: {Path.GetFileName(dllPath)}");
             try
             {
-                // Each recompile gets its own isolated AssemblyLoadContext so the
-                // runtime never complains "assembly with same name is already loaded".
-                // We keep a reference to the previous context alive long enough for
-                // any in-progress editor frames to finish, then let it be GC'd.
-                var newContext = new ScriptLoadContext(dllPath);
-                var asm = newContext.LoadFromAssemblyPath(dllPath);
-
-                // Replace the old context — previous one will be collected eventually
-                _scriptContext = newContext;
-
+                var asm = Assembly.LoadFrom(dllPath);
                 ComponentRegistry.UserAssembly = asm;
+
                 int count = 0;
                 foreach (var type in asm.GetExportedTypes())
                 {
@@ -337,15 +375,31 @@ namespace ElintriaEngine.Core
                     Console.WriteLine($"[ECS]   Registered: {type.FullName}");
                     count++;
                 }
-                Console.WriteLine($"[ECS] Loaded {count} script type(s).");
+                Console.WriteLine($"[ECS] {count} script type(s) loaded — Inspector will refresh.");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ECS] Failed to load GameScripts.dll: {ex.Message}");
+                Console.WriteLine($"[ECS] Failed to load scripts: {ex.Message}");
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
+        private static string? FindNewestScriptsDll(string dir)
+        {
+            if (!Directory.Exists(dir)) return null;
+            string? best = null;
+            long bestTick = 0;
+            foreach (var f in Directory.GetFiles(dir, "GameScripts*.dll"))
+            {
+                try
+                {
+                    long t = File.GetLastWriteTimeUtc(f).Ticks;
+                    if (t > bestTick) { bestTick = t; best = f; }
+                }
+                catch { }
+            }
+            return best;
+        }
+
         //  Helpers
         // ─────────────────────────────────────────────────────────────────────
 
@@ -426,51 +480,5 @@ namespace ElintriaEngine.Core
         }
 
         public void Dispose() => Stop();
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    //  ScriptLoadContext
-    //  An isolated AssemblyLoadContext that lets the editor load a new build of
-    //  GameScripts.dll on every recompile without hitting the "assembly with the
-    //  same name is already loaded" exception.
-    //
-    //  Resolution strategy
-    //  ───────────────────
-    //  1. The script DLL itself  → loaded directly from the given path.
-    //  2. ElintriaEngine.dll and all .NET / OpenTK types → delegated to the
-    //     default context so that Component, GameObject etc. share one identity.
-    // ─────────────────────────────────────────────────────────────────────────
-    internal sealed class ScriptLoadContext : AssemblyLoadContext
-    {
-        private readonly AssemblyDependencyResolver _resolver;
-
-        public ScriptLoadContext(string dllPath)
-            // isCollectible: false keeps the context (and its types) alive for
-            // the whole session; we just replace the reference each reload.
-            : base(name: "ScriptContext_" + Guid.NewGuid().ToString("N")[..8],
-                   isCollectible: false)
-        {
-            _resolver = new AssemblyDependencyResolver(dllPath);
-        }
-
-        protected override Assembly? Load(AssemblyName assemblyName)
-        {
-            // Always delegate engine + framework assemblies to the default context
-            // so that 'type is Component' checks work across reloads.
-            string? name = assemblyName.Name;
-            if (name == null) return null;
-            if (name == "ElintriaEngine" ||
-                name.StartsWith("System") ||
-                name.StartsWith("Microsoft") ||
-                name.StartsWith("OpenTK") ||
-                name.StartsWith("netstandard") ||
-                name.StartsWith("mscorlib") ||
-                name.StartsWith("Newtonsoft"))
-                return null;  // null → fall through to default context
-
-            // Resolve script-side dependencies (e.g. helper DLLs they reference)
-            string? resolved = _resolver.ResolveAssemblyToPath(assemblyName);
-            return resolved != null ? LoadFromAssemblyPath(resolved) : null;
-        }
     }
 }

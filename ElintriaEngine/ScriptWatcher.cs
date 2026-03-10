@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,41 +9,40 @@ namespace ElintriaEngine.Build
     // ═══════════════════════════════════════════════════════════════════════════
     //  ScriptWatcher
     //
-    //  Watches the project's Assets/ folder for any .cs file being created,
-    //  modified, or renamed. When a change is detected it waits for a short
-    //  quiet period (debounce) so that rapid saves / editor auto-saves only
-    //  trigger one build, then calls BuildSystem.CompileScriptsAsync.
+    //  Detects .cs file changes using TWO complementary strategies:
     //
-    //  Usage:
-    //      var watcher = new ScriptWatcher(projectRoot);
-    //      watcher.CompilationStarted  += () => { /* show spinner */ };
-    //      watcher.CompilationFinished += success => { /* hide spinner */ };
-    //      watcher.Start();
-    //      ...
-    //      watcher.Dispose();  // stops watching
+    //  1. FileSystemWatcher  — low-latency events for editors that write in-place.
+    //
+    //  2. Polling timer (every 1.5 s) — catches editors that use atomic
+    //     "write-temp-then-rename" saves (VS, VS Code, Rider, Notepad++, etc.)
+    //     which sometimes bypass FSW events entirely. Compares each file's
+    //     LastWriteTimeUtc against a stored snapshot.
+    //
+    //  Both strategies feed into the same debounce mechanism so rapid changes
+    //  still collapse into a single build.
     // ═══════════════════════════════════════════════════════════════════════════
     public sealed class ScriptWatcher : IDisposable
     {
         private readonly string _projectRoot;
         private FileSystemWatcher? _fsw;
-
-        // How long to wait after the last file-change event before compiling.
-        // 800 ms is enough to avoid double-firing on a single VS "Save" press.
-        private const int DebounceMs = 800;
-
         private Timer? _debounceTimer;
-        private bool _compiling;
-        private bool _pendingCompile;  // another change arrived while compiling
+        private Timer? _pollTimer;
+
+        // How long after the last detected change before compiling.
+        private const int DebounceMs = 600;
+
+        // How often the polling fallback runs.
+        private const int PollIntervalMs = 1500;
+
+        // Last-seen timestamps used by the poller (path → LastWriteTimeUtc ticks)
+        private readonly Dictionary<string, long> _timestamps = new(StringComparer.OrdinalIgnoreCase);
+
+        private volatile bool _compiling;
+        private volatile bool _pendingCompile;
 
         // ── Events ────────────────────────────────────────────────────────────
-        /// <summary>Fired on a background thread just before dotnet build starts.</summary>
         public event Action? CompilationStarted;
-
-        /// <summary>Fired on a background thread when the build finishes.
-        /// <c>true</c> = success, <c>false</c> = error.</summary>
         public event Action<bool>? CompilationFinished;
-
-        /// <summary>Log output from the compiler (one line per call).</summary>
         public event Action<string>? Log;
 
         public bool IsCompiling => _compiling;
@@ -52,7 +52,7 @@ namespace ElintriaEngine.Build
             _projectRoot = projectRoot;
         }
 
-        // ── Start / Stop ───────────────────────────────────────────────────────
+        // ── Start / Stop ──────────────────────────────────────────────────────
         public void Start()
         {
             string assetsDir = Path.Combine(_projectRoot, "Assets");
@@ -62,61 +62,132 @@ namespace ElintriaEngine.Build
                 return;
             }
 
-            _fsw = new FileSystemWatcher(assetsDir, "*.cs")
+            // ── Strategy 1: FileSystemWatcher ─────────────────────────────────
+            try
             {
-                IncludeSubdirectories = true,
-                NotifyFilter = NotifyFilters.LastWrite
-                                      | NotifyFilters.FileName
-                                      | NotifyFilters.DirectoryName,
-                EnableRaisingEvents = true,
-            };
+                _fsw = new FileSystemWatcher(assetsDir, "*.cs")
+                {
+                    IncludeSubdirectories = true,
+                    NotifyFilter = NotifyFilters.LastWrite
+                                          | NotifyFilters.FileName
+                                          | NotifyFilters.Size
+                                          | NotifyFilters.Attributes,
+                    // Larger buffer to avoid losing events during rapid multi-file saves
+                    InternalBufferSize = 65536,
+                    EnableRaisingEvents = true,
+                };
 
-            _fsw.Changed += OnFileEvent;
-            _fsw.Created += OnFileEvent;
-            _fsw.Renamed += OnFileEvent;
-            _fsw.Deleted += OnFileEvent;
+                _fsw.Changed += OnFswEvent;
+                _fsw.Created += OnFswEvent;
+                _fsw.Renamed += OnFswEvent;
+                _fsw.Deleted += OnFswEvent;
+                _fsw.Error += OnFswError;
 
-            Console.WriteLine($"[ScriptWatcher] Watching {assetsDir} for .cs changes...");
+                Console.WriteLine($"[ScriptWatcher] FSW watching: {assetsDir}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ScriptWatcher] FSW failed ({ex.Message}), polling only.");
+            }
 
-            // Do an initial compile so the DLL is ready before the user even
-            // presses Play for the first time.
+            // ── Strategy 2: Polling fallback ──────────────────────────────────
+            // Seed the timestamp snapshot so the very first poll doesn't fire
+            // immediately for every file that already exists.
+            SnapshotTimestamps(assetsDir);
+
+            _pollTimer = new Timer(_ => PollForChanges(assetsDir),
+                                   null, PollIntervalMs, PollIntervalMs);
+
+            Console.WriteLine("[ScriptWatcher] Polling fallback active.");
+
+            // Initial compile so the DLL is ready before the user first presses Play.
             ScheduleCompile();
         }
 
         public void Dispose()
         {
             _debounceTimer?.Dispose();
+            _pollTimer?.Dispose();
             _fsw?.Dispose();
         }
 
-        // ── Internal ───────────────────────────────────────────────────────────
-        private void OnFileEvent(object sender, FileSystemEventArgs e)
+        // ── FSW handler ───────────────────────────────────────────────────────
+        private void OnFswEvent(object sender, FileSystemEventArgs e)
         {
-            // Ignore changes inside obj/ or bin/ — those are our own build artifacts
             string rel = e.FullPath.Replace('\\', '/');
             if (rel.Contains("/obj/") || rel.Contains("/bin/")) return;
-
-            Console.WriteLine($"[ScriptWatcher] Detected change: {e.Name}");
+            Console.WriteLine($"[ScriptWatcher] FSW change: {e.Name}");
             ScheduleCompile();
         }
 
+        private void OnFswError(object sender, ErrorEventArgs e)
+        {
+            Console.WriteLine($"[ScriptWatcher] FSW error: {e.GetException().Message} — polling will cover.");
+        }
+
+        // ── Polling handler ───────────────────────────────────────────────────
+        private void PollForChanges(string assetsDir)
+        {
+            if (!Directory.Exists(assetsDir)) return;
+
+            bool changed = false;
+            try
+            {
+                var files = Directory.GetFiles(assetsDir, "*.cs", SearchOption.AllDirectories);
+                foreach (var f in files)
+                {
+                    string rel = f.Replace('\\', '/');
+                    if (rel.Contains("/obj/") || rel.Contains("/bin/")) continue;
+
+                    long ticks = 0;
+                    try { ticks = File.GetLastWriteTimeUtc(f).Ticks; } catch { continue; }
+
+                    if (!_timestamps.TryGetValue(f, out long prev) || prev != ticks)
+                    {
+                        _timestamps[f] = ticks;
+                        if (prev != 0)  // skip first-seen files (they were seeded)
+                        {
+                            Console.WriteLine($"[ScriptWatcher] Poll detected change: {Path.GetFileName(f)}");
+                            changed = true;
+                        }
+                    }
+                }
+
+                // Also detect deletions
+                var fileSet = new HashSet<string>(files, StringComparer.OrdinalIgnoreCase);
+                var toRemove = new List<string>();
+                foreach (var k in _timestamps.Keys)
+                    if (!fileSet.Contains(k)) { toRemove.Add(k); changed = true; }
+                foreach (var k in toRemove) _timestamps.Remove(k);
+            }
+            catch { /* best-effort */ }
+
+            if (changed) ScheduleCompile();
+        }
+
+        private void SnapshotTimestamps(string assetsDir)
+        {
+            _timestamps.Clear();
+            try
+            {
+                foreach (var f in Directory.GetFiles(assetsDir, "*.cs", SearchOption.AllDirectories))
+                {
+                    try { _timestamps[f] = File.GetLastWriteTimeUtc(f).Ticks; } catch { }
+                }
+            }
+            catch { }
+        }
+
+        // ── Compile pipeline ──────────────────────────────────────────────────
         private void ScheduleCompile()
         {
-            // Reset the debounce timer — the compile only fires after DebounceMs
-            // of silence, so rapid saves collapse into a single build.
             _debounceTimer?.Dispose();
             _debounceTimer = new Timer(_ => TriggerCompile(), null, DebounceMs, Timeout.Infinite);
         }
 
         private void TriggerCompile()
         {
-            if (_compiling)
-            {
-                // A build is already in progress — queue one more run for when it finishes
-                _pendingCompile = true;
-                return;
-            }
-
+            if (_compiling) { _pendingCompile = true; return; }
             _ = RunCompileAsync();
         }
 
@@ -141,9 +212,8 @@ namespace ElintriaEngine.Build
             CompilationFinished?.Invoke(success);
             Log?.Invoke(success
                 ? "[ScriptWatcher] Scripts compiled successfully."
-                : "[ScriptWatcher] Script compilation failed — check build output.");
+                : "[ScriptWatcher] Script compilation failed.");
 
-            // If another change arrived while we were compiling, run again now
             if (_pendingCompile)
             {
                 _pendingCompile = false;

@@ -299,11 +299,22 @@ namespace ElintriaEngine.UI
             if (_pendingScriptRefresh)
             {
                 _pendingScriptRefresh = false;
+
+                // 1. Load the newly compiled DLL and register all types
                 Core.SceneRunner.LoadUserScripts(_projectRoot);
-                // Re-inspect inspector and refresh UIEditor script binding panel
-                Inspector.Inspect(Hierarchy.Selected);
+
+                // 2. Upgrade every DynamicScript placeholder AND every stale real-component
+                //    instance (from a previous compile) to a fresh instance from the new assembly.
+                //    This is exactly the same code path as "remove script + re-add script".
+                Core.SceneRunner.ResolveEditorScripts(_scene);
+
+                // 3. Re-draw whatever the inspector is currently showing.
+                //    ForceRefresh re-inspects _target directly so it works even when
+                //    nothing is selected in the hierarchy (Hierarchy.Selected could be null).
+                Inspector.ForceRefresh();
+
                 UIEditor.NotifyScriptsReloaded();
-                Console.WriteLine("[Editor] Script types loaded — inspector + UI editor refreshed.");
+                Console.WriteLine("[Editor] Scripts reloaded — all components upgraded, inspector refreshed.");
             }
 
             // ── Start runner once compilation finishes ────────────────────────

@@ -8,8 +8,7 @@ namespace GameScripts
         // ── Public fields (visible in Inspector) ──────────────────────────────
         public float speed  = 5.0f;
         public bool  active = true;
-        public bool  debug  = false;
-        public bool debug2 = false;
+        public bool  debug  = false;  
 
         // Called once before the first frame — like Unity's Start()
         public override void OnStart()

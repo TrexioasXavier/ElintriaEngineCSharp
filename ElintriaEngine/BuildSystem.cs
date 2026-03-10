@@ -74,6 +74,15 @@ namespace ElintriaEngine.Build
                 return null;
             }
 
+            // ── Unique assembly name on every compile ─────────────────────────
+            // Using a timestamp suffix means every build produces a brand-new
+            // assembly identity (e.g. "GameScripts_638800000000").  Plain
+            // Assembly.LoadFrom() then works on the first call and every reload
+            // because .NET never sees the same identity twice.  No
+            // AssemblyLoadContext tricks required, no FileLoadException possible.
+            string tag = DateTime.UtcNow.Ticks.ToString();
+            string asmName = "GameScripts_" + tag;
+
             string scriptsProjDir = Path.Combine(projectRoot, ".elintria", "Scripts");
             Directory.CreateDirectory(scriptsProjDir);
 
@@ -81,26 +90,39 @@ namespace ElintriaEngine.Build
             string binDir = Path.Combine(scriptsProjDir, "bin");
             string objDir = Path.Combine(scriptsProjDir, "obj");
 
-            WriteScriptsCsproj(csprojPath, csFiles, FindEngineDll());
+            // Clean up old session DLLs (keep only current build to save disk)
+            if (Directory.Exists(binDir))
+                foreach (var old in Directory.GetFiles(binDir, "GameScripts_*.dll"))
+                    try { File.Delete(old); } catch { }
 
-            // Wipe obj/ so stale auto-generated AssemblyInfo files don't cause CS0579
+            // Wipe obj/ so stale AssemblyInfo files don't cause CS0579
             if (Directory.Exists(objDir))
                 Directory.Delete(objDir, recursive: true);
 
-            Console.WriteLine($"[Build] Compiling {csFiles.Length} script file(s)...");
+            WriteScriptsCsproj(csprojPath, csFiles, FindEngineDll(), asmName);
+
+            Console.WriteLine($"[Build] Compiling {csFiles.Length} script file(s) as {asmName}...");
+
             bool ok = await RunDotnet($"build \"{csprojPath}\" -c Release -o \"{binDir}\"",
-                                      silent: true);
+                                      silent: false);
             if (!ok)
             {
-                Console.WriteLine("[Build] Script compilation failed.");
+                Console.WriteLine("[Build] Script compilation failed — see errors above.");
                 return null;
             }
 
-            string dll = Path.Combine(binDir, "GameScripts.dll");
+            string dll = Path.Combine(binDir, asmName + ".dll");
             if (!File.Exists(dll))
             {
-                Console.WriteLine("[Build] Build succeeded but GameScripts.dll not found.");
+                Console.WriteLine($"[Build] Build succeeded but {asmName}.dll not found.");
                 return null;
+            }
+
+            // Wait until dotnet fully releases the file handle
+            for (int i = 0; i < 10; i++)
+            {
+                try { using var fs = File.Open(dll, FileMode.Open, FileAccess.Read, FileShare.Read); break; }
+                catch (IOException) { await Task.Delay(100); }
             }
 
             Console.WriteLine($"[Build] Scripts compiled → {dll}");
@@ -254,7 +276,7 @@ namespace ElintriaEngine.Build
         //  File generators
         // ═══════════════════════════════════════════════════════════════════════
 
-        private static void WriteScriptsCsproj(string path, string[] csFiles, string? engineDll)
+        private static void WriteScriptsCsproj(string path, string[] csFiles, string? engineDll, string asmName = "GameScripts")
         {
             string dir = Path.GetDirectoryName(path)!;
             var sb = new StringBuilder();
@@ -262,7 +284,7 @@ namespace ElintriaEngine.Build
             sb.AppendLine("  <PropertyGroup>");
             sb.AppendLine("    <OutputType>Library</OutputType>");
             sb.AppendLine("    <TargetFramework>net10.0</TargetFramework>");
-            sb.AppendLine("    <AssemblyName>GameScripts</AssemblyName>");
+            sb.AppendLine($"    <AssemblyName>{asmName}</AssemblyName>");
             sb.AppendLine("    <RootNamespace>GameScripts</RootNamespace>");
             sb.AppendLine("    <Nullable>enable</Nullable>");
             sb.AppendLine("    <ImplicitUsings>disable</ImplicitUsings>");
@@ -818,9 +840,8 @@ namespace ElintriaEngine.Build
             int charsPerLine = Math.Max(10, (int)(logUsableW / LogCharWidth));
 
             float ly = logRect.Y + 2f - ScrollOffset;
-            for (int i = 0; i < _log.Count; i++)
+            foreach (var entry in _log)
             {
-                var entry = _log[i];
                 Color tc = entry.Level switch
                 {
                     LogLevel.Error => CLogError,

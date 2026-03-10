@@ -26,9 +26,9 @@ namespace ElintriaEngine.UI.Panels
         // Fields rendered this frame (rebuilt each render)
         private readonly List<FieldRecord> _fields = new();
 
-        // Track which script types were visible last frame.
-        // If the type set changes (new compile), Inspect() is called automatically.
-        private readonly Dictionary<string, bool> _knownScriptTypes = new();
+        // Track the last assembly we saw so we detect each new compile automatically.
+        // When UserAssembly changes the inspector re-renders without needing an external Inspect() call.
+        private System.Reflection.Assembly? _lastUserAssembly;
 
         // Active text edit
         private string? _editId;
@@ -72,6 +72,13 @@ namespace ElintriaEngine.UI.Panels
             ScrollOffset = 0;
         }
 
+        /// <summary>
+        /// Re-inspect the CURRENT target (whatever is already shown).
+        /// Call this after a script recompile so new fields appear immediately
+        /// without needing the user to re-click the GameObject.
+        /// </summary>
+        public void ForceRefresh() => Inspect(_target);
+
         public void SetDropHighlight(bool on) => _dropHighlight = on;
 
         // ── Render ─────────────────────────────────────────────────────────────
@@ -79,6 +86,18 @@ namespace ElintriaEngine.UI.Panels
         {
             if (!IsVisible) return;
             DrawHeader(r);
+
+            // ── Auto-detect script recompile ──────────────────────────────────
+            // If the user-assembly reference changed since last frame, a new compile
+            // just landed. Reset scroll so newly added fields are visible at top.
+            var currentAsm = Core.ComponentRegistry.UserAssembly;
+            if (currentAsm != null && currentAsm != _lastUserAssembly)
+            {
+                _lastUserAssembly = currentAsm;
+                ScrollOffset = 0;
+                // Keep _editId so the user doesn't lose a half-typed value;
+                // the field might still exist in the new type.
+            }
 
             var cr = ContentRect;
             r.PushClip(cr);
@@ -154,21 +173,15 @@ namespace ElintriaEngine.UI.Panels
         {
             string cid = "c" + comp.GetHashCode();
 
-            // ── DynamicScript placeholder — shows fields from compiled type ─────────
+            // ── DynamicScript placeholder — shows editable fields from compiled type ──
             if (comp is Core.DynamicScript ds)
             {
                 DrawSectionHeader(r, cr, ds.ScriptTypeName, () => _target?.RemoveComponent(comp), ref y);
                 DrawBoolField(r, cr, "Enabled", comp.Enabled, ref y, cid + "_en", v => comp.Enabled = v);
 
-                var realType = Core.ComponentRegistry.TryGetType(ds.ScriptTypeName);
-
-                // Track whether the type was available last frame.
-                // If this changes (newly compiled) we re-scroll to top so new fields are visible.
-                bool wasKnown = _knownScriptTypes.TryGetValue(ds.ScriptTypeName, out bool prev) && prev;
-                bool isKnown = realType != null;
-                _knownScriptTypes[ds.ScriptTypeName] = isKnown;
-                if (isKnown && !wasKnown)
-                    ScrollOffset = 0;   // jump to top so new fields are visible
+                // Always look up via the latest UserAssembly first (bypasses stale _map entries),
+                // then fall back to the registry dict.
+                Type? realType = GetLatestScriptType(ds.ScriptTypeName);
 
                 if (realType != null)
                 {
@@ -184,22 +197,16 @@ namespace ElintriaEngine.UI.Panels
                         if (skipNames.Contains(fi.Name)) continue;
                         hasFields = true;
 
-                        // Capture loop variable so each closure has its own copy
-                        var fieldInfo = fi;
+                        var capturedFi = fi;
                         var fieldName = fi.Name;
                         Type fieldType = fi.FieldType;
 
-                        // Read from FieldValues dict (editor storage), coerce to the right type
                         ds.FieldValues.TryGetValue(fieldName, out var stored);
                         object? display = CoerceToType(stored, fieldType) ?? GetDefault(fieldType);
 
                         DrawAnyField(r, cr, fieldName, display, fieldType,
                             cid + "_ds_" + fieldName, ref y,
-                            newVal =>
-                            {
-                                // Store in FieldValues — copied to the real instance on play
-                                ds.FieldValues[fieldName] = newVal;
-                            });
+                            newVal => ds.FieldValues[fieldName] = newVal);
                     }
 
                     if (!hasFields)
@@ -211,13 +218,12 @@ namespace ElintriaEngine.UI.Panels
                 }
                 else
                 {
-                    // Script not yet compiled — show a hint
                     float lx = cr.X + PAD;
                     r.FillRect(new RectangleF(lx, y, cr.Width - PAD * 2, 34f),
                         Color.FromArgb(30, 200, 160, 40));
                     r.DrawText("⚙  Script not compiled yet.", new PointF(lx + 6f, y + 4f),
                         Color.FromArgb(255, 190, 150, 40), 9f);
-                    r.DrawText("Save your script file to trigger auto-compile.",
+                    r.DrawText("Save your script file — it will compile automatically.",
                         new PointF(lx + 6f, y + 17f), Color.FromArgb(255, 130, 130, 130), 8f);
                     y += 40f; ContentHeight += 40f;
                 }
@@ -342,6 +348,31 @@ namespace ElintriaEngine.UI.Panels
             if (t == typeof(OpenTK.Mathematics.Vector4)) return OpenTK.Mathematics.Vector4.Zero;
             if (t.IsValueType) return Activator.CreateInstance(t);
             return null;
+        }
+
+        /// Look up the compiled type for a script name.
+        /// Prefers the latest UserAssembly (guaranteed fresh from last compile)
+        /// over the registry dict, which may hold a stale type from an older context.
+        private static Type? GetLatestScriptType(string typeName)
+        {
+            // 1. Scan the freshest user assembly directly
+            var asm = Core.ComponentRegistry.UserAssembly;
+            if (asm != null)
+            {
+                try
+                {
+                    foreach (var t in asm.GetExportedTypes())
+                    {
+                        if (t.IsAbstract) continue;
+                        if (t.Name != typeName && t.FullName != typeName) continue;
+                        if (typeof(Core.Component).IsAssignableFrom(t)) return t;
+                    }
+                }
+                catch { }
+            }
+
+            // 2. Fall back to registry dict (catches built-in + first-compile types)
+            return Core.ComponentRegistry.TryGetType(typeName);
         }
 
         /// Ensures a stored value is the right boxed type for DrawAnyField's pattern matches.

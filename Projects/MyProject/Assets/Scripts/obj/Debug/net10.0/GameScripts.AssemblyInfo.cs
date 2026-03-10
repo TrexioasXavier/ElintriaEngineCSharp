@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("GameScripts")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+838e584dbdc49007bd77e9ed0699e6f94a1b3cda")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+13a4bd81852b70690d52cebb5a6a934eccec7708")]
 [assembly: System.Reflection.AssemblyProductAttribute("GameScripts")]
 [assembly: System.Reflection.AssemblyTitleAttribute("GameScripts")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
