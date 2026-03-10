@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("ElintriaEngine")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+e5a1c3470817a27fda14b5ba81e29d790f3dd90c")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+02df1379f1ff589a7e8b372c418bcea807a5c88d")]
 [assembly: System.Reflection.AssemblyProductAttribute("ElintriaEngine")]
 [assembly: System.Reflection.AssemblyTitleAttribute("ElintriaEngine")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

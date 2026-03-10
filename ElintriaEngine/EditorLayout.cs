@@ -27,6 +27,9 @@ namespace ElintriaEngine.UI
         public ProjectPanel Project { get; }
         public SceneViewPanel SceneView { get; }
         public BuildSettingsPanel BuildSettings { get; }
+        public UI.Panels.UIEditorPanel UIEditor { get; }
+
+        private Core.UIDocument _uiDocument = new();
 
         private Core.Scene _scene = new();
         private Core.Scene? _savedScene = null;  // editor snapshot, restored on Stop
@@ -67,6 +70,11 @@ namespace ElintriaEngine.UI
                     OutputDirectory = "Build/Output",
                 });
             BuildSettings.IsVisible = false;
+
+            UIEditor = new UI.Panels.UIEditorPanel(
+                new RectangleF(winW / 2f - 420f, MenuH + 30f, 860f, 540f));
+            UIEditor.SetDocument(_uiDocument);
+            UIEditor.IsVisible = false;
 
             WireEvents(projectRoot);
 
@@ -152,6 +160,9 @@ namespace ElintriaEngine.UI
                         break;
                     case "SceneView":
                         SceneView.IsVisible = !SceneView.IsVisible;
+                        break;
+                    case "UIEditor":
+                        UIEditor.IsVisible = !UIEditor.IsVisible;
                         break;
                 }
                 OnResize(_winW, _winH);
@@ -297,6 +308,14 @@ namespace ElintriaEngine.UI
             Project.OnRender(r);
 
             if (BuildSettings.IsVisible) BuildSettings.OnRender(r);
+            if (UIEditor.IsVisible) UIEditor.OnRender(r);
+
+            // Render UIDocument elements as a game overlay inside the scene view
+            if (_uiDocument.Elements.Count > 0)
+            {
+                var sv = SceneView.ContentRect;
+                Rendering.UIDocumentRenderer.Render(r, _uiDocument, sv);
+            }
 
             // Push live compile state into the menu bar so the indicator updates
             MenuBar.IsCompiling = _scriptsCompiling || (_watcher?.IsCompiling ?? false);
@@ -404,6 +423,7 @@ namespace ElintriaEngine.UI
 
         private IEnumerable<Panel> PanelZOrder()
         {
+            if (UIEditor.IsVisible) yield return UIEditor;
             if (BuildSettings.IsVisible) yield return BuildSettings;
             yield return Inspector;
             yield return Hierarchy;

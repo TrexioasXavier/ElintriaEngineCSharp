@@ -39,11 +39,11 @@ namespace ElintriaEngine.UI.Panels
         /// <summary>Set by EditorLayout to show a warning dot when compile failed.</summary>
         public bool IsScriptsDirty { get; set; }
 
-        public  Action? NewScene, OpenScene, SaveScene, SaveSceneAs, Exit;
-        public  Action? Undo, Redo, OpenPreferences, OpenProjectSettings;
-        public  Action? Play, Pause, Stop;
-        public  Action? BuildOnly, BuildAndRun, OpenBuildSettings;
-        public  Action<string>? ToggleWindow;
+        public Action? NewScene, OpenScene, SaveScene, SaveSceneAs, Exit;
+        public Action? Undo, Redo, OpenPreferences, OpenProjectSettings;
+        public Action? Play, Pause, Stop;
+        public Action? BuildOnly, BuildAndRun, OpenBuildSettings;
+        public Action<string>? ToggleWindow;
 
         private static readonly Color CBar = Color.FromArgb(255, 24, 24, 24);
         private static readonly Color CItemN = Color.FromArgb(255, 24, 24, 24);
@@ -122,6 +122,7 @@ namespace ElintriaEngine.UI.Panels
                 new("Inspector",  () => ToggleWindow?.Invoke("Inspector")),
                 new("Project",    () => ToggleWindow?.Invoke("Project")),
                 new("Scene View", () => ToggleWindow?.Invoke("SceneView")),
+                new("UI Editor",  () => ToggleWindow?.Invoke("UIEditor")),
                 new("Console",    () => ToggleWindow?.Invoke("Console")),
             }));
             _menus.Add(("Help", default, new List<MenuDropdownItem>
