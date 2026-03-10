@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "/lGoX+NpPTI=",
+  "dgSpecHash": "a2jXgp1UBUg=",
   "success": true,
-  "projectFilePath": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEditor\\ElintriaEditor.csproj",
+  "projectFilePath": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineCSharp\\ElintriaEditor\\ElintriaEditor.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\trexi\\.nuget\\packages\\microsoft.extensions.dependencyinjection.abstractions\\7.0.0\\microsoft.extensions.dependencyinjection.abstractions.7.0.0.nupkg.sha512",
     "C:\\Users\\trexi\\.nuget\\packages\\microsoft.win32.systemevents\\10.0.3\\microsoft.win32.systemevents.10.0.3.nupkg.sha512",

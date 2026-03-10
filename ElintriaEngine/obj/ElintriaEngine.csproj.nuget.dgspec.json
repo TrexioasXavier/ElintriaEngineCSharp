@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngine\\ElintriaEngine.csproj": {}
+    "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineCSharp\\ElintriaEngine\\ElintriaEngine.csproj": {}
   },
   "projects": {
-    "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngine\\ElintriaEngine.csproj": {
+    "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineCSharp\\ElintriaEngine\\ElintriaEngine.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngine\\ElintriaEngine.csproj",
+        "projectUniqueName": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineCSharp\\ElintriaEngine\\ElintriaEngine.csproj",
         "projectName": "ElintriaEngine",
-        "projectPath": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngine\\ElintriaEngine.csproj",
+        "projectPath": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineCSharp\\ElintriaEngine\\ElintriaEngine.csproj",
         "packagesPath": "C:\\Users\\trexi\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngine\\obj\\",
+        "outputPath": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineCSharp\\ElintriaEngine\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\trexi\\AppData\\Roaming\\NuGet\\NuGet.Config",

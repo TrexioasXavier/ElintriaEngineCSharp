@@ -34,11 +34,16 @@ namespace ElintriaEngine.UI.Panels
         public bool IsPlaying { get; private set; }
         public bool IsPaused { get; private set; }
 
-        public Action? NewScene, OpenScene, SaveScene, SaveSceneAs, Exit;
-        public Action? Undo, Redo, OpenPreferences, OpenProjectSettings;
-        public Action? Play, Pause, Stop;
-        public Action? BuildOnly, BuildAndRun, OpenBuildSettings;
-        public Action<string>? ToggleWindow;
+        /// <summary>Set by EditorLayout to show the spinner while scripts compile.</summary>
+        public bool IsCompiling { get; set; }
+        /// <summary>Set by EditorLayout to show a warning dot when compile failed.</summary>
+        public bool IsScriptsDirty { get; set; }
+
+        public  Action? NewScene, OpenScene, SaveScene, SaveSceneAs, Exit;
+        public  Action? Undo, Redo, OpenPreferences, OpenProjectSettings;
+        public  Action? Play, Pause, Stop;
+        public  Action? BuildOnly, BuildAndRun, OpenBuildSettings;
+        public  Action<string>? ToggleWindow;
 
         private static readonly Color CBar = Color.FromArgb(255, 24, 24, 24);
         private static readonly Color CItemN = Color.FromArgb(255, 24, 24, 24);
@@ -167,6 +172,32 @@ namespace ElintriaEngine.UI.Panels
             r.DrawText(">", new PointF(_playBtn.X + 6f, _playBtn.Y + 4f), Color.White, 10f);
             r.DrawText("||", new PointF(_pauseBtn.X + 4f, _pauseBtn.Y + 4f), Color.White, 10f);
             r.DrawText("[]", new PointF(_stopBtn.X + 3f, _stopBtn.Y + 4f), Color.White, 10f);
+
+            // ── Script compile status indicator (right side of bar) ───────────
+            if (IsCompiling)
+            {
+                // Rotating dots spinner  ⣾⣽⣻⢿⡿⣟⣯⣷
+                string[] frames = { "⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷" };
+                int frame = (int)(DateTime.UtcNow.Millisecond / 125.0) % frames.Length;
+                r.DrawText(frames[frame],
+                    new PointF(_width - 120f, 5f),
+                    Color.FromArgb(255, 100, 180, 255), 11f);
+                r.DrawText("Compiling...",
+                    new PointF(_width - 108f, 5f),
+                    Color.FromArgb(255, 140, 200, 255), 10f);
+            }
+            else if (IsScriptsDirty)
+            {
+                r.DrawText("● Script error",
+                    new PointF(_width - 108f, 5f),
+                    Color.FromArgb(255, 220, 80, 60), 10f);
+            }
+            else
+            {
+                r.DrawText("● Scripts ready",
+                    new PointF(_width - 115f, 5f),
+                    Color.FromArgb(255, 70, 180, 70), 10f);
+            }
 
             if (_openIdx >= 0 && _dropdown != null)
                 _dropdown.OnRender(r);

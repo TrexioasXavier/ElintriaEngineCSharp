@@ -74,6 +74,9 @@ namespace ElintriaEngine
             GL.Viewport(0, 0, w, h);
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
+            // Tick play-mode component scripts (OnUpdate on all active components)
+            _layout.Update(args.Time);
+
             _layout.Render3D();
 
             GL.Viewport(0, 0, w, h);

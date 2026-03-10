@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "d2IogNUwo/Q=",
+  "dgSpecHash": "kGW9fUT41jw=",
   "success": true,
-  "projectFilePath": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngine\\ElintriaEngine.csproj",
+  "projectFilePath": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineCSharp\\ElintriaEngine\\ElintriaEngine.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\trexi\\.nuget\\packages\\aspose.email\\26.1.0\\aspose.email.26.1.0.nupkg.sha512",
     "C:\\Users\\trexi\\.nuget\\packages\\microsoft.win32.systemevents\\10.0.3\\microsoft.win32.systemevents.10.0.3.nupkg.sha512",

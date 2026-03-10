@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("ElintriaEditor")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+d2ac9b75529c374d8e85243f5586be79bf7509dc")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+6955a13073a2eed986a226bf72940fa4a93eeaa8")]
 [assembly: System.Reflection.AssemblyProductAttribute("ElintriaEditor")]
 [assembly: System.Reflection.AssemblyTitleAttribute("ElintriaEditor")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

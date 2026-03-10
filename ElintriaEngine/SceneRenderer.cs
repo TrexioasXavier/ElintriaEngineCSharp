@@ -107,6 +107,11 @@ namespace ElintriaEngine.Rendering.Scene
         {
             if (!go.ActiveSelf) return;
 
+            // Skip objects with a zero scale axis — their matrix is singular and
+            // cannot be inverted for the normal matrix calculation.
+            var scale = go.Transform.LocalScale;
+            if (scale.X == 0f || scale.Y == 0f || scale.Z == 0f) return;
+
             // Need at least a MeshFilter to know what shape to draw
             var mf = go.GetComponent<Core.MeshFilter>();
             if (mf == null) return;
@@ -117,7 +122,14 @@ namespace ElintriaEngine.Rendering.Scene
             if (mesh == null) return;
 
             var model = go.Transform.LocalMatrix;
-            var normalMat = Matrix3.Invert(Matrix3.Transpose(new Matrix3(model)));
+
+            // Guard against singular matrix (happens when any scale component is 0).
+            // Matrix3.Invert throws InvalidOperationException on a non-invertible matrix,
+            // so we fall back to identity when the determinant is effectively zero.
+            var m3 = new Matrix3(model);
+            var normalMat = MathF.Abs(m3.Determinant) > 1e-6f
+                ? Matrix3.Invert(Matrix3.Transpose(m3))
+                : Matrix3.Identity;
 
             _defaultMat!.Bind();
             _stdShader.SetMat4("uModel", ref model);

@@ -612,11 +612,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineC\\ElintriaEngineC.csproj",
+      "projectUniqueName": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineCSharp\\ElintriaEngineC\\ElintriaEngineC.csproj",
       "projectName": "ElintriaEngineC",
-      "projectPath": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineC\\ElintriaEngineC.csproj",
+      "projectPath": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineCSharp\\ElintriaEngineC\\ElintriaEngineC.csproj",
       "packagesPath": "C:\\Users\\trexi\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineC\\obj\\",
+      "outputPath": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineCSharp\\ElintriaEngineC\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\trexi\\AppData\\Roaming\\NuGet\\NuGet.Config",

@@ -13,31 +13,41 @@ using ElintriaEngine.Core;
 
 namespace GameScripts
 {{
-    /// <summary>
-    /// Attach to any GameObject via the Inspector or by dragging from the Project panel.
-    /// All public fields are automatically shown and editable in the Inspector.
-    /// </summary>
     public class {className} : Component
     {{
         // ── Public fields (visible in Inspector) ──────────────────────────────
-        public float speed     = 5.0f;
-        public bool  isActive  = true;
-        public int   health    = 100;
+        public float speed  = 5.0f;
+        public bool  active = true;
 
+        // Called once before the first frame — like Unity's Start()
         public override void OnStart()
         {{
-            // Called once when the scene begins
             Console.WriteLine($""{className} started on {{GameObject?.Name}}"");
         }}
 
+        // Called every frame — like Unity's Update()
         public override void OnUpdate(double deltaTime)
         {{
-            // Called every frame
         }}
 
+        // Called after all Updates — like Unity's LateUpdate()
+        public override void OnLateUpdate(double deltaTime)
+        {{
+        }}
+
+        // Called at a fixed rate (50 Hz) — like Unity's FixedUpdate()
+        public override void OnFixedUpdate(double fixedDeltaTime)
+        {{
+        }}
+
+        // Called once when the component is first created/enabled — like Unity's Awake()
+        public override void Awake()
+        {{
+        }}
+
+        // Called when the component or GameObject is destroyed
         public override void OnDestroy()
         {{
-            // Called when the component or GameObject is destroyed
         }}
     }}
 }}

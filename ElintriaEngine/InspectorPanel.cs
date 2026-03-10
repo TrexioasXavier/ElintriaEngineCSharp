@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Reflection;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
@@ -153,16 +154,36 @@ namespace ElintriaEngine.UI.Panels
             // Enabled toggle
             DrawBoolField(r, cr, "Enabled", comp.Enabled, ref y, cid + "_en", v => comp.Enabled = v);
 
-            // Reflected public fields
-            foreach (var fi in comp.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance))
+            // Reflected public fields – FlattenHierarchy ensures fields declared in
+            // base user classes (not just the immediate concrete type) are included.
+            // We skip fields declared on Component itself (Enabled, GameObject) because
+            // they are already drawn above or are infrastructure-only.
+            var componentBaseFields = new System.Collections.Generic.HashSet<string>(
+                typeof(Component).GetFields(BindingFlags.Public | BindingFlags.Instance |
+                                            BindingFlags.FlattenHierarchy)
+                    .Select(f => f.Name));
+
+            foreach (var fi in comp.GetType().GetFields(
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.FlattenHierarchy))
+            {
+                if (componentBaseFields.Contains(fi.Name)) continue;
                 DrawAnyField(r, cr, fi.Name, fi.GetValue(comp), fi.FieldType,
                     cid + "_f_" + fi.Name, ref y, nv => fi.SetValue(comp, nv));
+            }
 
-            // Reflected public r/w properties (only declared on the concrete type)
+            // Reflected public r/w properties – search all levels of the hierarchy
+            // (not just DeclaredOnly) so properties from intermediate base classes appear.
+            var seenProps = new System.Collections.Generic.HashSet<string>();
+            var componentBaseProps = new System.Collections.Generic.HashSet<string>(
+                typeof(Component).GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                    .Select(p => p.Name));
+
             foreach (var pi in comp.GetType().GetProperties(
-                BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                BindingFlags.Public | BindingFlags.Instance))
             {
                 if (!pi.CanRead || !pi.CanWrite) continue;
+                if (componentBaseProps.Contains(pi.Name)) continue;  // skip Enabled etc.
+                if (!seenProps.Add(pi.Name)) continue;               // skip duplicates
                 DrawAnyField(r, cr, pi.Name, pi.GetValue(comp), pi.PropertyType,
                     cid + "_p_" + pi.Name, ref y, nv => pi.SetValue(comp, nv));
             }
@@ -286,16 +307,20 @@ namespace ElintriaEngine.UI.Panels
                             : $"{vals[i]:F3}";
                 r.DrawText(disp, new PointF(fx + 12f, y + 4f), ColText, 9f);
 
-                // Register field for mouse picking
-                _fields.Add(new FieldRecord(fr, eid, vals[i], typeof(float), obj =>
+                // Capture loop index in a local — without this every closure shares
+                // the same 'i' variable which equals 3 after the loop, meaning every
+                // axis setter always hits the Z branch (the reported X→Z bug).
+                int ci = i;
+                float[] snap = { v.X, v.Y, v.Z };  // snapshot current values
+                _fields.Add(new FieldRecord(fr, eid, vals[ci], typeof(float), obj =>
                 {
-                float nv = obj is float f ? f : vals[i];
-                    setter(i == 0 ? new Vector3(nv, v.Y, v.Z)
-                         : i == 1 ? new Vector3(v.X, nv, v.Z)
-                                  : new Vector3(v.X, v.Y, nv));
-            }));
-        }
-        y += FH; ContentHeight += FH;
+                    float nv = obj is float f ? f : snap[ci];
+                    setter(ci == 0 ? new Vector3(nv, snap[1], snap[2])
+                         : ci == 1 ? new Vector3(snap[0], nv, snap[2])
+                                   : new Vector3(snap[0], snap[1], nv));
+                }));
+            }
+            y += FH; ContentHeight += FH;
         }
 
         private void DrawFloatField(IEditorRenderer r, RectangleF cr, string label,

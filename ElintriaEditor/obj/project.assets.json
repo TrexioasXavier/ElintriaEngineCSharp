@@ -631,11 +631,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEditor\\ElintriaEditor.csproj",
+      "projectUniqueName": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineCSharp\\ElintriaEditor\\ElintriaEditor.csproj",
       "projectName": "ElintriaEditor",
-      "projectPath": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEditor\\ElintriaEditor.csproj",
+      "projectPath": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineCSharp\\ElintriaEditor\\ElintriaEditor.csproj",
       "packagesPath": "C:\\Users\\trexi\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEditor\\obj\\",
+      "outputPath": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineCSharp\\ElintriaEditor\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\trexi\\AppData\\Roaming\\NuGet\\NuGet.Config",
@@ -652,8 +652,8 @@
         "net10.0": {
           "targetAlias": "net10.0",
           "projectReferences": {
-            "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineC\\ElintriaEngineC.csproj": {
-              "projectPath": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineC\\ElintriaEngineC.csproj"
+            "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineCSharp\\ElintriaEngineC\\ElintriaEngineC.csproj": {
+              "projectPath": "C:\\Users\\trexi\\Desktop\\Editors\\Visual Studio\\Projects\\ElintriaEngineC\\ElintriaEngineCSharp\\ElintriaEngineC\\ElintriaEngineC.csproj"
             }
           }
         }

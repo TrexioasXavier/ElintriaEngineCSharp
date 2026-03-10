@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Threading.Tasks;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.GraphicsLibraryFramework;
 using ElintriaEngine.Build;
@@ -28,6 +29,12 @@ namespace ElintriaEngine.UI
         public BuildSettingsPanel BuildSettings { get; }
 
         private Core.Scene _scene = new();
+        private Core.Scene? _savedScene = null;  // editor snapshot, restored on Stop
+        private Core.SceneRunner _runner = new();
+        private Build.ScriptWatcher? _watcher;
+        private bool _scriptsDirty = false;  // watcher says DLL is stale
+        private bool _scriptsCompiling = false;  // watcher is building right now
+        private float _compileSpinAngle = 0f;     // spinner animation
         private PointF _mouse;
         private string _projectRoot = "";
         private int _winW, _winH;
@@ -78,6 +85,15 @@ namespace ElintriaEngine.UI
             string rootForProject = System.IO.Directory.Exists(assetsDir) ? assetsDir : projectRoot;
             if (System.IO.Directory.Exists(rootForProject))
                 Project.SetRootPath(rootForProject);
+
+            // Auto-compile whenever .cs files change in Assets/
+            if (!string.IsNullOrEmpty(projectRoot))
+            {
+                _watcher = new Build.ScriptWatcher(projectRoot);
+                _watcher.CompilationStarted += () => { _scriptsCompiling = true; _scriptsDirty = false; };
+                _watcher.CompilationFinished += ok => { _scriptsCompiling = false; _scriptsDirty = !ok; };
+                _watcher.Start();
+            }
         }
 
         public void Init() => SceneView.Init();
@@ -104,6 +120,11 @@ namespace ElintriaEngine.UI
             MenuBar.BuildOnly += () => { BuildSettings.IsVisible = true; BuildSettings.StartBuild(false); };
             MenuBar.BuildAndRun += () => { BuildSettings.IsVisible = true; BuildSettings.StartBuild(true); };
             MenuBar.OpenBuildSettings += () => BuildSettings.IsVisible = !BuildSettings.IsVisible;
+
+            MenuBar.Play += EnterPlayMode;
+            MenuBar.Pause += () => _runner.IsPaused = !_runner.IsPaused;
+            MenuBar.Stop += ExitPlayMode;
+
             MenuBar.ToggleWindow += name =>
             {
                 switch (name)
@@ -121,10 +142,112 @@ namespace ElintriaEngine.UI
                         SceneView.IsVisible = !SceneView.IsVisible;
                         break;
                 }
-                // Always recalculate all panel bounds after any toggle so nothing
-                // ends up at a stale or out-of-bounds position.
                 OnResize(_winW, _winH);
             };
+        }
+
+        private bool _compilingScripts = false;  // true while dotnet build is running
+        private bool _pendingPlayStart = false;  // set when compilation finishes, Start on next Update
+
+        // ── Play mode (powered by SceneRunner) ────────────────────────────────
+        private void EnterPlayMode()
+        {
+            if (_runner.IsRunning || _compilingScripts) return;
+
+            // Snapshot + deep-clone the editor scene so runtime changes
+            // don't corrupt it. Restore on Stop.
+            _savedScene = _scene;
+            try
+            {
+                string json = Core.SceneSerializer.ToJson(_scene);
+                _scene = Core.SceneSerializer.FromJson(json);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Editor] Scene clone failed, using live scene: {ex.Message}");
+                _scene = _savedScene;
+            }
+
+            Hierarchy.SetScene(_scene);
+            SceneView.SetScene(_scene);
+            Inspector.Inspect(null);
+
+            // If the watcher is currently compiling, wait for it to finish
+            // rather than starting a second redundant compile.
+            if (_scriptsCompiling)
+            {
+                Console.WriteLine("[Editor] Waiting for background script compile to finish...");
+                _compilingScripts = true;
+                var sceneRef = _scene;
+                _watcher!.CompilationFinished += WaitForWatcher;
+                void WaitForWatcher(bool _)
+                {
+                    _watcher!.CompilationFinished -= WaitForWatcher;
+                    _compilingScripts = false;
+                    _pendingPlayStart = true;
+                }
+                return;
+            }
+
+            // If the watcher already produced a fresh DLL (no dirty flag), skip
+            // the compile entirely and go straight to play.
+            if (!_scriptsDirty)
+            {
+                Console.WriteLine("[Editor] Scripts are up-to-date, entering play mode.");
+                _pendingPlayStart = true;
+                return;
+            }
+
+            // Scripts are dirty — compile now on a background thread, then start.
+            _compilingScripts = true;
+            Console.WriteLine("[Editor] Compiling scripts...");
+            var sceneSnapshot = _scene;
+            var rootSnapshot = _projectRoot;
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                await Build.BuildSystem.CompileScriptsAsync(rootSnapshot);
+                _scene = sceneSnapshot;
+                _compilingScripts = false;
+                _pendingPlayStart = true;
+                Console.WriteLine("[Editor] Compilation done — starting play mode on next frame.");
+            });
+        }
+
+        private void ExitPlayMode()
+        {
+            if (!_runner.IsRunning) return;
+
+            // SceneRunner calls OnDisable → OnDestroy on everything
+            _runner.Stop();
+
+            // Restore the clean editor scene
+            if (_savedScene != null)
+            {
+                _scene = _savedScene;
+                _savedScene = null;
+            }
+
+            Hierarchy.SetScene(_scene);
+            SceneView.SetScene(_scene);
+            Inspector.Inspect(null);
+        }
+
+        /// <summary>
+        /// Called every frame by EditorWindow on the main/render thread.
+        /// Starts the runner after compilation completes, then ticks it each frame.
+        /// </summary>
+        public void Update(double dt)
+        {
+            // Start the runner on the main thread once background compilation finishes.
+            // This avoids the race condition caused by async void.
+            if (_pendingPlayStart)
+            {
+                _pendingPlayStart = false;
+                Console.WriteLine("[Editor] Starting SceneRunner...");
+                _runner.Start(_scene, _projectRoot);
+            }
+
+            _runner.Tick(dt);
         }
 
         // ── PHASE 1: 3D render — call BEFORE BeginFrame ────────────────────────
@@ -150,6 +273,9 @@ namespace ElintriaEngine.UI
 
             if (BuildSettings.IsVisible) BuildSettings.OnRender(r);
 
+            // Push live compile state into the menu bar so the indicator updates
+            MenuBar.IsCompiling = _scriptsCompiling || (_watcher?.IsCompiling ?? false);
+            MenuBar.IsScriptsDirty = _scriptsDirty;
             MenuBar.OnRender(r);
 
             // Drag ghost
@@ -278,6 +404,6 @@ namespace ElintriaEngine.UI
             Console.WriteLine("[Editor] OpenScene: use file dialog (not yet implemented)");
         }
 
-        public void Dispose() => SceneView.Dispose();
+        public void Dispose() { _watcher?.Dispose(); _runner.Dispose(); SceneView.Dispose(); }
     }
 }

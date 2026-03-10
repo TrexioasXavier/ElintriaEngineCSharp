@@ -17,7 +17,6 @@ namespace ElintriaEngine.Core
         private static int _idCounter = 1;
 
         public IReadOnlyList<GameObject> RootObjects => _roots;
-
         public static int NextId() => _idCounter++;
 
         public void AddGameObject(GameObject go)
@@ -48,7 +47,7 @@ namespace ElintriaEngine.Core
 
         public IEnumerable<GameObject> All()
         {
-            foreach (var r in _roots)
+            foreach (var r in _roots.ToArray())
                 foreach (var go in r.SelfAndDescendants())
                     yield return go;
         }
@@ -74,16 +73,54 @@ namespace ElintriaEngine.Core
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    //  Component (abstract base)
+    //  Component — full Unity-like lifecycle
+    //
+    //  Override order (Unity-identical):
+    //    Awake()          called once when the component is first created/enabled
+    //    OnEnable()       called when the component or its GO becomes active
+    //    OnStart()        called before the first frame update (after ALL Awakes)
+    //    OnFixedUpdate()  called at a fixed physics rate (default 50 Hz)
+    //    OnUpdate()       called once per frame
+    //    OnLateUpdate()   called after all OnUpdates each frame
+    //    OnDisable()      called when the component or GO is disabled/destroyed
+    //    OnDestroy()      called when the component is permanently removed
     // ═══════════════════════════════════════════════════════════════════════════
     public abstract class Component
     {
-        public GameObject? GameObject { get; set; }
-        public bool Enabled { get; set; } = true;
+        public GameObject? GameObject { get; internal set; }
 
+        private bool _enabled = true;
+        public bool Enabled
+        {
+            get => _enabled;
+            set
+            {
+                if (_enabled == value) return;
+                _enabled = value;
+                if (value) OnEnable();
+                else OnDisable();
+            }
+        }
+
+        // ── Lifecycle ─────────────────────────────────────────────────────────
+        public virtual void Awake() { }
+        public virtual void OnEnable() { }
         public virtual void OnStart() { }
+        public virtual void OnFixedUpdate(double dt) { }
         public virtual void OnUpdate(double dt) { }
+        public virtual void OnLateUpdate(double dt) { }
+        public virtual void OnDisable() { }
         public virtual void OnDestroy() { }
+
+        // ── Convenience accessors (mirrors Unity's Component shortcuts) ───────
+        public Transform? Transform => GameObject?.Transform;
+
+        /// <summary>Find another component on the same GameObject.</summary>
+        public T? GetComponent<T>() where T : Component =>
+            GameObject?.GetComponent<T>();
+
+        /// <summary>Destroy this component (equivalent to Unity's Destroy(this)).</summary>
+        public void DestroySelf() => GameObject?.RemoveComponent(this);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -189,21 +226,18 @@ namespace ElintriaEngine.Core
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    //  DynamicScript  –  placeholder for user scripts not yet compiled
-    //  Shown in Inspector as a script slot; replaced at build/runtime with real type
+    //  DynamicScript — placeholder for a user script not yet compiled into the
+    //  editor process. Shown in Inspector by type name. At play mode / build
+    //  time the SceneRunner replaces it with the real compiled Component.
     // ═══════════════════════════════════════════════════════════════════════════
     public class DynamicScript : Component
     {
-        /// <summary>Fully-qualified or simple class name of the user script.</summary>
         public string ScriptTypeName { get; set; } = "";
-
-        // Public fields exposed in inspector at build time via reflection on the
-        // actual compiled type. At editor time we just show the type name.
         public override string ToString() => $"Script: {ScriptTypeName}";
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    //  Component Registry
+    //  ComponentRegistry
     // ═══════════════════════════════════════════════════════════════════════════
     public static class ComponentRegistry
     {
@@ -224,6 +258,9 @@ namespace ElintriaEngine.Core
             { "Button",          typeof(ButtonComponent) },
             { "Text",            typeof(TextComponent)   },
             { "Slider",          typeof(SliderComponent) },
+            // DynamicScript must be explicitly registered so scene
+            // serialization can round-trip script placeholders correctly.
+            { "DynamicScript",   typeof(DynamicScript)   },
         };
 
         public static void Register(string name, Type type) => _map[name] = type;
@@ -233,12 +270,19 @@ namespace ElintriaEngine.Core
             if (_map.TryGetValue(name, out var t))
                 return (Component?)Activator.CreateInstance(t);
 
-            // Search loaded assemblies (user scripts)
+            // Fallback: search all loaded assemblies by simple name AND full name.
+            // GetType(string) requires fully-qualified names, so we iterate instead.
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
             {
-                var found = asm.GetType(name) ?? asm.GetType("GameScripts." + name);
-                if (found != null && typeof(Component).IsAssignableFrom(found))
-                    return (Component?)Activator.CreateInstance(found);
+                foreach (var type in asm.GetTypes())
+                {
+                    if ((type.Name == name || type.FullName == name)
+                        && typeof(Component).IsAssignableFrom(type)
+                        && !type.IsAbstract)
+                    {
+                        return (Component?)Activator.CreateInstance(type);
+                    }
+                }
             }
             return null;
         }
@@ -262,13 +306,17 @@ namespace ElintriaEngine.Core
         public List<GameObject> Children { get; } = new();
         public List<Component> Components { get; } = new();
 
+        // The SceneRunner subscribes to this to bootstrap newly added components
+        public event Action<Component>? ComponentAdded;
+
         public GameObject(string name) => Name = name;
 
-        // ── Component API ──────────────────────────────────────────────────────
+        // ── Component API — mirrors Unity's GetComponent / AddComponent ────────
         public T AddComponent<T>() where T : Component, new()
         {
             var c = new T { GameObject = this };
             Components.Add(c);
+            ComponentAdded?.Invoke(c);
             return c;
         }
 
@@ -278,6 +326,7 @@ namespace ElintriaEngine.Core
             if (c == null) return null;
             c.GameObject = this;
             Components.Add(c);
+            ComponentAdded?.Invoke(c);
             return c;
         }
 
@@ -296,7 +345,11 @@ namespace ElintriaEngine.Core
 
         public void RemoveComponent(Component c)
         {
-            if (Components.Remove(c)) c.OnDestroy();
+            if (Components.Remove(c))
+            {
+                c.OnDisable();
+                c.OnDestroy();
+            }
         }
 
         // ── Hierarchy ──────────────────────────────────────────────────────────
@@ -318,7 +371,7 @@ namespace ElintriaEngine.Core
         public IEnumerable<GameObject> SelfAndDescendants()
         {
             yield return this;
-            foreach (var child in Children)
+            foreach (var child in Children.ToArray())
                 foreach (var d in child.SelfAndDescendants())
                     yield return d;
         }
@@ -351,8 +404,8 @@ namespace ElintriaEngine.Core
 
         public void Destroy()
         {
-            foreach (var c in Components) c.OnDestroy();
-            foreach (var child in Children) child.Destroy();
+            foreach (var c in Components) { try { c.OnDisable(); } catch { } try { c.OnDestroy(); } catch { } }
+            foreach (var child in Children.ToArray()) child.Destroy();
         }
     }
 }
