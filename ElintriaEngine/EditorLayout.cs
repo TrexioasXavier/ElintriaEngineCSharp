@@ -32,9 +32,9 @@ namespace ElintriaEngine.UI
         private Core.Scene? _savedScene = null;  // editor snapshot, restored on Stop
         private Core.SceneRunner _runner = new();
         private Build.ScriptWatcher? _watcher;
-        private bool _scriptsDirty = false;  // watcher says DLL is stale
-        private bool _scriptsCompiling = false;  // watcher is building right now
-        private float _compileSpinAngle = 0f;     // spinner animation
+        private volatile bool _scriptsDirty = true;   // starts dirty until first compile
+        private volatile bool _scriptsCompiling = false;
+        private volatile bool _pendingScriptRefresh = false;  // set on bg thread, read on main
         private PointF _mouse;
         private string _projectRoot = "";
         private int _winW, _winH;
@@ -90,8 +90,20 @@ namespace ElintriaEngine.UI
             if (!string.IsNullOrEmpty(projectRoot))
             {
                 _watcher = new Build.ScriptWatcher(projectRoot);
-                _watcher.CompilationStarted += () => { _scriptsCompiling = true; _scriptsDirty = false; };
-                _watcher.CompilationFinished += ok => { _scriptsCompiling = false; _scriptsDirty = !ok; };
+                _watcher.CompilationStarted += () =>
+                {
+                    _scriptsCompiling = true;
+                    _scriptsDirty = false;
+                };
+                _watcher.CompilationFinished += ok =>
+                {
+                    // IMPORTANT: this callback runs on a background thread.
+                    // Do NOT touch scene data or UI state here — only set flags.
+                    // Update() on the main thread picks these up next frame.
+                    _scriptsCompiling = false;
+                    _scriptsDirty = !ok;
+                    if (ok) _pendingScriptRefresh = true;
+                };
                 _watcher.Start();
             }
         }
@@ -238,8 +250,21 @@ namespace ElintriaEngine.UI
         /// </summary>
         public void Update(double dt)
         {
-            // Start the runner on the main thread once background compilation finishes.
-            // This avoids the race condition caused by async void.
+            // ── Post-compilation refresh (main thread only) ───────────────────
+            // _pendingScriptRefresh is set by the background compile thread.
+            // We load user scripts and refresh the inspector here, on the main
+            // thread, so there are no data races with the render loop.
+            if (_pendingScriptRefresh)
+            {
+                _pendingScriptRefresh = false;
+                Core.SceneRunner.LoadUserScripts(_projectRoot);
+                // Re-inspect so the inspector re-reads TryGetType with the newly
+                // registered types and shows the real public fields immediately.
+                Inspector.Inspect(Hierarchy.Selected);
+                Console.WriteLine("[Editor] Script types loaded — inspector refreshed.");
+            }
+
+            // ── Start runner once compilation finishes ────────────────────────
             if (_pendingPlayStart)
             {
                 _pendingPlayStart = false;

@@ -149,6 +149,54 @@ namespace ElintriaEngine.UI.Panels
         private void DrawComponent(IEditorRenderer r, RectangleF cr, Component comp, ref float y)
         {
             string cid = "c" + comp.GetHashCode();
+
+            // ── DynamicScript: look up the real type every frame and show its fields ──
+            if (comp is Core.DynamicScript ds)
+            {
+                DrawSectionHeader(r, cr, ds.ScriptTypeName, () => _target?.RemoveComponent(comp), ref y);
+                DrawBoolField(r, cr, "Enabled", comp.Enabled, ref y, cid + "_en", v => comp.Enabled = v);
+
+                var realType = Core.ComponentRegistry.TryGetType(ds.ScriptTypeName);
+                if (realType != null)
+                {
+                    var skipNames = new System.Collections.Generic.HashSet<string>(
+                        typeof(Core.Component)
+                            .GetFields(BindingFlags.Public | BindingFlags.Instance | BindingFlags.FlattenHierarchy)
+                            .Select(f => f.Name));
+
+                    foreach (var fi in realType.GetFields(
+                        BindingFlags.Public | BindingFlags.Instance | BindingFlags.FlattenHierarchy))
+                    {
+                        if (skipNames.Contains(fi.Name)) continue;
+
+                        // Capture loop variable explicitly so each closure has its own copy
+                        var fieldInfo = fi;
+                        var fieldName = fi.Name;
+                        Type fieldType = fi.FieldType;
+
+                        // Read stored value from FieldValues dict; fall back to default
+                        ds.FieldValues.TryGetValue(fieldName, out var stored);
+                        object? display = CoerceToType(stored, fieldType) ?? GetDefault(fieldType);
+
+                        DrawAnyField(r, cr, fieldName, display, fieldType,
+                            cid + "_ds_" + fieldName, ref y,
+                            newVal => ds.FieldValues[fieldName] = newVal);
+                    }
+                }
+                else
+                {
+                    float lx = cr.X + PAD;
+                    r.DrawText("(script not compiled yet)",
+                        new PointF(lx, y + 3f), Color.FromArgb(255, 130, 130, 130), 10f);
+                    y += 18f; ContentHeight += 18f;
+                }
+
+                r.DrawLine(new PointF(cr.X, y), new PointF(cr.Right, y), Color.FromArgb(255, 50, 50, 50));
+                y += 3f; ContentHeight += 3f;
+                return;
+            }
+
+            // ── Normal (compiled) component ───────────────────────────────────
             DrawSectionHeader(r, cr, comp.GetType().Name, () => _target?.RemoveComponent(comp), ref y);
 
             // Enabled toggle
@@ -250,6 +298,30 @@ namespace ElintriaEngine.UI.Panels
         }
 
         // ── Generic field dispatcher ───────────────────────────────────────────
+        /// Returns the default value for a type (0, false, "", Vector3.Zero etc.)
+        private static object? GetDefault(Type t)
+        {
+            if (t == typeof(string)) return "";
+            if (t == typeof(bool)) return false;
+            if (t == typeof(float)) return 0f;
+            if (t == typeof(double)) return 0.0;
+            if (t == typeof(int)) return 0;
+            if (t == typeof(OpenTK.Mathematics.Vector2)) return OpenTK.Mathematics.Vector2.Zero;
+            if (t == typeof(OpenTK.Mathematics.Vector3)) return OpenTK.Mathematics.Vector3.Zero;
+            if (t == typeof(OpenTK.Mathematics.Vector4)) return OpenTK.Mathematics.Vector4.Zero;
+            if (t.IsValueType) return Activator.CreateInstance(t);
+            return null;
+        }
+
+        /// Ensures a stored value is the right boxed type for DrawAnyField's pattern matches.
+        /// e.g. a stored boxed int won't match "value is float fv", so we convert it.
+        private static object? CoerceToType(object? value, Type target)
+        {
+            if (value == null) return null;
+            if (target.IsInstanceOfType(value)) return value;
+            try { return Convert.ChangeType(value, target); } catch { return null; }
+        }
+
         private void DrawAnyField(IEditorRenderer r, RectangleF cr, string label,
             object? value, Type type, string id, ref float y, Action<object?> setter)
         {

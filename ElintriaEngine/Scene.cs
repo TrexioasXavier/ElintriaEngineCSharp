@@ -227,12 +227,16 @@ namespace ElintriaEngine.Core
 
     // ═══════════════════════════════════════════════════════════════════════════
     //  DynamicScript — placeholder for a user script not yet compiled into the
-    //  editor process. Shown in Inspector by type name. At play mode / build
-    //  time the SceneRunner replaces it with the real compiled Component.
+    //  editor process. After compilation the editor resolves it to the real type.
     // ═══════════════════════════════════════════════════════════════════════════
     public class DynamicScript : Component
     {
         public string ScriptTypeName { get; set; } = "";
+
+        // Stores public field values edited in the Inspector before/between
+        // compilations so they are not lost when we swap to the real type.
+        public Dictionary<string, object?> FieldValues { get; } = new();
+
         public override string ToString() => $"Script: {ScriptTypeName}";
     }
 
@@ -264,6 +268,19 @@ namespace ElintriaEngine.Core
         };
 
         public static void Register(string name, Type type) => _map[name] = type;
+
+        /// <summary>Returns the Type for a registered component name, or null if not found.</summary>
+        public static Type? TryGetType(string name)
+        {
+            if (_map.TryGetValue(name, out var t)) return t;
+            // Also search loaded assemblies by simple name
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                foreach (var type in asm.GetTypes())
+                    if ((type.Name == name || type.FullName == name)
+                        && typeof(Component).IsAssignableFrom(type) && !type.IsAbstract)
+                        return type;
+            return null;
+        }
 
         public static Component? Create(string name)
         {
