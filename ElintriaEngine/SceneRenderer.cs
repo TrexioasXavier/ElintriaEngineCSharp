@@ -29,6 +29,9 @@ namespace ElintriaEngine.Rendering.Scene
         // ── Editor camera ─────────────────────────────────────────────────────
         public EditorCamera Camera { get; } = new();
 
+        // ── Gizmo renderer ────────────────────────────────────────────────
+        public GizmoRenderer Gizmos { get; } = new();
+
         // ── Game camera override (set by game runtime, overrides EditorCamera) ─
         /// <summary>When non-null, used instead of EditorCamera for view.</summary>
         public Matrix4? GameViewMatrix { get; set; }
@@ -36,7 +39,12 @@ namespace ElintriaEngine.Rendering.Scene
         public Matrix4? GameProjMatrix { get; set; }
 
         // ── Selection outline ─────────────────────────────────────────────────
-        public GameObject? Selected { get; set; }
+        public GameObject? Selected
+        {
+            get => _selected;
+            set { _selected = value; Gizmos.HandleTarget = value; }
+        }
+        private GameObject? _selected;
 
         private bool _ready;
 
@@ -57,18 +65,20 @@ namespace ElintriaEngine.Rendering.Scene
 
             _gridMesh = BuildGrid(20, 1f);
             _axisMesh = BuildAxisLines();
+            Gizmos.Init();
             _ready = true;
         }
 
+        // ── Render mode ───────────────────────────────────────────────────────
+        /// When true, game-camera rules apply: no grid/axes, black if no camera,
+        /// black if no lights. When false, editor camera + hardcoded light.
+        public bool IsPlayMode { get; set; } = false;
+
         // ── Main render ───────────────────────────────────────────────────────
-        /// <param name="viewport">Window-space pixel rect for the scene view.</param>
-        /// <param name="winW">Full window width – used for Y-flip.</param>
-        /// <param name="winH">Full window height – used for Y-flip.</param>
         public void Render(RectangleF viewport, Core.Scene? scene, int winW, int winH)
         {
             if (!_ready) Init();
 
-            // Flip Y: OpenGL origin is bottom-left, editor UI is top-left
             int vx = (int)viewport.X;
             int vy = winH - (int)(viewport.Y + viewport.Height);
             int vw = (int)viewport.Width;
@@ -80,21 +90,112 @@ namespace ElintriaEngine.Rendering.Scene
             GL.Scissor(vx, vy, vw, vh);
             GL.Enable(EnableCap.DepthTest);
             GL.DepthFunc(DepthFunction.Less);
-            GL.ClearColor(0.15f, 0.16f, 0.17f, 1f);
-            GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
             float aspect = vw / (float)vh;
-            var view = GameViewMatrix ?? Camera.GetViewMatrix();
-            var proj = GameProjMatrix ?? Camera.GetProjectionMatrix(aspect);
 
-            DrawGrid(view, proj);
-            DrawAxisLines(view, proj);
+            // ── Find game camera ───────────────────────────────────────────────
+            Core.Camera? gameCam = null;
+            if (scene != null)
+                foreach (var go in scene.All())
+                    if (go.ActiveSelf)
+                    {
+                        var c = go.GetComponent<Core.Camera>();
+                        if (c != null && c.Enabled) { gameCam = c; break; }
+                    }
+
+            // ── In play mode: black screen if no camera ────────────────────────
+            if (IsPlayMode && gameCam == null && GameViewMatrix == null)
+            {
+                GL.ClearColor(0f, 0f, 0f, 1f);
+                GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+                GL.Disable(EnableCap.ScissorTest);
+                GL.Disable(EnableCap.DepthTest);
+                return;
+            }
+
+            // ── Choose view / projection ───────────────────────────────────────
+            Matrix4 view, proj;
+            Vector3 camPos;
+            if (GameViewMatrix != null)
+            {
+                view = GameViewMatrix.Value;
+                proj = GameProjMatrix ?? Camera.GetProjectionMatrix(aspect);
+                // Invert view to get camera world position
+                var inv = view; inv.Invert();
+                camPos = inv.ExtractTranslation();
+            }
+            else if (IsPlayMode && gameCam != null)
+            {
+                view = gameCam.GetViewMatrix();
+                proj = gameCam.GetProjectionMatrix(aspect);
+                camPos = gameCam.Position;
+                // Background colour from camera settings
+                GL.ClearColor(gameCam.BackgroundR, gameCam.BackgroundG, gameCam.BackgroundB, 1f);
+            }
+            else
+            {
+                view = Camera.GetViewMatrix();
+                proj = Camera.GetProjectionMatrix(aspect);
+                camPos = Camera.Position;
+                GL.ClearColor(0.15f, 0.16f, 0.17f, 1f);
+            }
+
+            GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+
+            // ── Collect lights from scene ──────────────────────────────────────
+            var dirLights = new List<Core.DirectionalLight>();
+            var spotLights = new List<Core.SpotLight>();
+            if (scene != null)
+                foreach (var go in scene.All())
+                    if (go.ActiveSelf)
+                    {
+                        var dl = go.GetComponent<Core.DirectionalLight>();
+                        if (dl != null && dl.Enabled) dirLights.Add(dl);
+                        var sl = go.GetComponent<Core.SpotLight>();
+                        if (sl != null && sl.Enabled) spotLights.Add(sl);
+                        // Legacy Light component -> treat as directional
+                        var ll = go.GetComponent<Core.Light>();
+                        if (ll != null && ll.Enabled && ll.LightType == "Directional")
+                        {
+                            // Fake a DirectionalLight from the legacy component
+                            dirLights.Add(new Core.DirectionalLight
+                            {
+                                ColorR = ll.ColorR,
+                                ColorG = ll.ColorG,
+                                ColorB = ll.ColorB,
+                                Intensity = ll.Intensity,
+                                GameObject = go,
+                                Enabled = true,
+                            });
+                        }
+                    }
+
+            // In play mode with no lights → black ambient (0), not editor default
+            float ambient = IsPlayMode
+                ? (dirLights.Count == 0 && spotLights.Count == 0 ? 0f : 0.15f)
+                : 0.22f;
+
+            // Editor mode uses a hardcoded directional light when scene has none
+            bool editorFakeLightNeeded = !IsPlayMode && dirLights.Count == 0 && spotLights.Count == 0;
+
+            if (!IsPlayMode)
+            {
+                DrawGrid(view, proj);
+                DrawAxisLines(view, proj);
+            }
 
             if (scene != null)
                 foreach (var go in scene.All())
-                    DrawGameObject(go, view, proj);
+                    DrawGameObject(go, view, proj, camPos, dirLights, spotLights,
+                                   ambient, editorFakeLightNeeded);
 
-            // Selection outline
+            // Gizmos: scene-space overlays, always on top (depth-test off inside).
+            // IMPORTANT: pass the original UI-space 'viewport' rect (top-left origin),
+            // NOT (vx,vy,vw,vh) which is GL-space (bottom-left origin). Mouse coords
+            // are UI-space, so WorldToScreen must use the same coordinate system.
+            if (!IsPlayMode)
+                Gizmos.Render(view, proj, camPos, scene, viewport);
+
             if (Selected != null)
                 DrawSelectionOutline(Selected, view, proj);
 
@@ -103,16 +204,16 @@ namespace ElintriaEngine.Rendering.Scene
         }
 
         // ── Draw one GameObject ───────────────────────────────────────────────
-        private void DrawGameObject(GameObject go, Matrix4 view, Matrix4 proj)
+        private void DrawGameObject(
+            GameObject go, Matrix4 view, Matrix4 proj, Vector3 camPos,
+            List<Core.DirectionalLight> dirLights,
+            List<Core.SpotLight> spotLights,
+            float ambient, bool editorFakeLight)
         {
             if (!go.ActiveSelf) return;
-
-            // Skip objects with a zero scale axis — their matrix is singular and
-            // cannot be inverted for the normal matrix calculation.
             var scale = go.Transform.LocalScale;
             if (scale.X == 0f || scale.Y == 0f || scale.Z == 0f) return;
 
-            // Need at least a MeshFilter to know what shape to draw
             var mf = go.GetComponent<Core.MeshFilter>();
             if (mf == null) return;
 
@@ -122,28 +223,67 @@ namespace ElintriaEngine.Rendering.Scene
             if (mesh == null) return;
 
             var model = go.Transform.LocalMatrix;
-
-            // Guard against singular matrix (happens when any scale component is 0).
-            // Matrix3.Invert throws InvalidOperationException on a non-invertible matrix,
-            // so we fall back to identity when the determinant is effectively zero.
             var m3 = new Matrix3(model);
             var normalMat = MathF.Abs(m3.Determinant) > 1e-6f
-                ? Matrix3.Invert(Matrix3.Transpose(m3))
-                : Matrix3.Identity;
+                ? Matrix3.Invert(Matrix3.Transpose(m3)) : Matrix3.Identity;
 
             _defaultMat!.Bind();
+            int prog = _stdShader.Program;
+
             _stdShader.SetMat4("uModel", ref model);
             _stdShader.SetMat4("uView", ref view);
             _stdShader.SetMat4("uProjection", ref proj);
-            GL.UniformMatrix3(GL.GetUniformLocation(_stdShader.Program, "uNormalMat"),
-                false, ref normalMat);
-            _stdShader.SetVec3("uLightDir", new Vector3(-0.6f, -1f, -0.5f).Normalized());
-            _stdShader.SetVec3("uLightColor", Vector3.One);
-            _stdShader.SetVec3("uCamPos", Camera.Position);
+            GL.UniformMatrix3(GL.GetUniformLocation(prog, "uNormalMat"), false, ref normalMat);
+            _stdShader.SetVec3("uCamPos", camPos);
+            GL.Uniform1(GL.GetUniformLocation(prog, "uAmbient"), ambient);
+            GL.Uniform1(GL.GetUniformLocation(prog, "uMetallic"), 0f);
+            GL.Uniform1(GL.GetUniformLocation(prog, "uRoughness"), 0.5f);
 
-            // Per-object colour tint based on the MeshRenderer component
+            // Directional lights
+            int dirCount = editorFakeLight ? 1 : Math.Min(dirLights.Count, 4);
+            GL.Uniform1(GL.GetUniformLocation(prog, "uDirCount"), dirCount);
+            if (editorFakeLight)
+            {
+                var fakeDir = new Vector3(-0.6f, -1f, -0.5f).Normalized();
+                GL.Uniform3(GL.GetUniformLocation(prog, "uDirDir[0]"), fakeDir.X, fakeDir.Y, fakeDir.Z);
+                GL.Uniform3(GL.GetUniformLocation(prog, "uDirColor[0]"), 1.0f, 1.0f, 1.0f);
+            }
+            else
+            {
+                for (int i = 0; i < dirCount; i++)
+                {
+                    var d = dirLights[i];
+                    var dir = d.Direction;
+                    GL.Uniform3(GL.GetUniformLocation(prog, $"uDirDir[{i}]"),
+                        dir.X, dir.Y, dir.Z);
+                    GL.Uniform3(GL.GetUniformLocation(prog, $"uDirColor[{i}]"),
+                        d.ColorR * d.Intensity, d.ColorG * d.Intensity, d.ColorB * d.Intensity);
+                }
+            }
+
+            // Spot lights
+            int spotCount = Math.Min(spotLights.Count, 8);
+            GL.Uniform1(GL.GetUniformLocation(prog, "uSpotCount"), spotCount);
+            for (int i = 0; i < spotCount; i++)
+            {
+                var s = spotLights[i];
+                var pos = s.Position;
+                var dir = s.Direction;
+                float inner = MathF.Cos(MathHelper.DegreesToRadians(s.SpotAngle * (1f - s.BlendFraction)));
+                float outer = MathF.Cos(MathHelper.DegreesToRadians(s.SpotAngle));
+                GL.Uniform3(GL.GetUniformLocation(prog, $"uSpotPos[{i}]"), pos.X, pos.Y, pos.Z);
+                GL.Uniform3(GL.GetUniformLocation(prog, $"uSpotDir[{i}]"), dir.X, dir.Y, dir.Z);
+                GL.Uniform3(GL.GetUniformLocation(prog, $"uSpotColor[{i}]"),
+                    s.ColorR * s.Intensity, s.ColorG * s.Intensity, s.ColorB * s.Intensity);
+                GL.Uniform1(GL.GetUniformLocation(prog, $"uSpotRange[{i}]"), s.Range);
+                GL.Uniform1(GL.GetUniformLocation(prog, $"uSpotCosInner[{i}]"), inner);
+                GL.Uniform1(GL.GetUniformLocation(prog, $"uSpotCosOuter[{i}]"), outer);
+            }
+
             var mr = go.GetComponent<Core.MeshRenderer>();
-            _stdShader.SetVec4("uColor", mr != null ? new Vector4(0.8f, 0.82f, 0.85f, 1f) : Vector4.One);
+            _stdShader.SetVec4("uColor", mr != null
+                ? new Vector4(mr.AlbedoR, mr.AlbedoG, mr.AlbedoB, 1f)
+                : new Vector4(0.8f, 0.82f, 0.85f, 1f));
 
             mesh.Draw();
         }
@@ -258,6 +398,7 @@ namespace ElintriaEngine.Rendering.Scene
             _gridMesh?.Dispose(); _axisMesh?.Dispose();
             _stdShader?.Dispose(); _gridShader?.Dispose(); _flatShader?.Dispose();
             _defaultMat?.Dispose();
+            Gizmos.Dispose();
         }
     }
 

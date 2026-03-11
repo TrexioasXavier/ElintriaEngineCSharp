@@ -18,7 +18,7 @@ namespace ElintriaEngine.Rendering.Scene
         private int _vbo, _ebo;
 
         // ── Vertex layout: pos(3) + normal(3) + uv(2) = 8 floats = 32 bytes ──
-        public static readonly int VertexStride = 8 * sizeof(float);
+        public readonly int VertexStride = 8 * sizeof(float);
 
         private Mesh(string name) => Name = name;
 
@@ -40,7 +40,7 @@ namespace ElintriaEngine.Rendering.Scene
             GL.BufferData(BufferTarget.ElementArrayBuffer, indices.Length * sizeof(uint),
                 indices, BufferUsageHint.StaticDraw);
 
-            int s = Mesh.VertexStride;
+            int s = m.VertexStride;
             GL.EnableVertexAttribArray(0); GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, s, 0);
             GL.EnableVertexAttribArray(1); GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, s, 12);
             GL.EnableVertexAttribArray(2); GL.VertexAttribPointer(2, 2, VertexAttribPointerType.Float, false, s, 24);
@@ -245,11 +245,43 @@ namespace ElintriaEngine.Rendering.Scene
 
         private static int CompileStage(ShaderType type, string src)
         {
+             
+            Console.WriteLine($"=== {type} SOURCE START ===");
+            var lines1 = src.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+            for (int i = 0; i < lines1.Length; i++)
+            {
+                string line = lines1[i].Replace("\t", "\\t").Replace(" ", "·"); // · for spaces
+                Console.WriteLine($"{i + 1,3}| {line}");
+                // Optional: hex dump suspicious lines
+                if (i + 1 >= 60 && i + 1 <= 70) // around line 64
+                {
+                    Console.Write("HEX: ");
+                    foreach (char c in lines1[i]) Console.Write($"{(int)c:X4} ");
+                    Console.WriteLine();
+                }
+            }
+            Console.WriteLine($"=== {type} SOURCE END ===\n");
+
+
+
             int id = GL.CreateShader(type);
+
             GL.ShaderSource(id, src);
             GL.CompileShader(id);
+
             GL.GetShader(id, ShaderParameter.CompileStatus, out int ok);
-            if (ok == 0) throw new Exception($"{type} compile: " + GL.GetShaderInfoLog(id));
+            if (ok == 0)
+            {
+                string log = GL.GetShaderInfoLog(id);
+                string header = $"Failed to compile {type}:\n";
+                // Optional: print first few lines of source with line numbers
+                var lines = src.Split('\n');
+                for (int i = 0; i < Math.Min(10, lines.Length); i++)
+                    header += $"{i + 1,3}: {lines[i]}\n";
+                header += "...\n";
+
+                throw new Exception(header + "Compile log:\n" + log);
+            }
             return id;
         }
 
@@ -340,26 +372,68 @@ uniform sampler2D uAlbedo;
 uniform vec4  uColor;
 uniform float uMetallic;
 uniform float uRoughness;
-uniform vec3  uLightDir;
-uniform vec3  uLightColor;
 uniform vec3  uCamPos;
+
+// -- Directional lights --------------------------------------
+#define MAX_DIR_LIGHTS 4
+uniform int  uDirCount;
+uniform vec3 uDirDir  [MAX_DIR_LIGHTS];   // world-space direction (points away from light)
+uniform vec3 uDirColor[MAX_DIR_LIGHTS];   // pre-multiplied by intensity
+
+// -- Spot lights --------------------------------------
+#define MAX_SPOT_LIGHTS 8
+uniform int  uSpotCount;
+uniform vec3  uSpotPos      [MAX_SPOT_LIGHTS];
+uniform vec3  uSpotDir      [MAX_SPOT_LIGHTS];
+uniform vec3  uSpotColor    [MAX_SPOT_LIGHTS];
+uniform float uSpotRange    [MAX_SPOT_LIGHTS];
+uniform float uSpotCosInner [MAX_SPOT_LIGHTS];  // cos(half inner angle)
+uniform float uSpotCosOuter [MAX_SPOT_LIGHTS];  // cos(half outer angle)
+
+// Ambient when no lights are present
+uniform float uAmbient;
 
 out vec4 FragColor;
 
 void main(){
     vec4  albedo   = texture(uAlbedo, vUV) * uColor;
     vec3  N        = normalize(vNormal);
-    vec3  L        = normalize(-uLightDir);
     vec3  V        = normalize(uCamPos - vWorldPos);
-    vec3  H        = normalize(L + V);
+    float roughness = max(uRoughness, 0.01);
+    float shininess = mix(8.0, 256.0, 1.0 - roughness);
 
-    float diff     = max(dot(N, L), 0.0);
-    float spec     = pow(max(dot(N, H), 0.0), mix(8.0, 256.0, 1.0-uRoughness));
-    float ambient  = 0.18;
+    vec3 Lo = vec3(0.0);
 
-    vec3  col      = albedo.rgb * (ambient + diff * uLightColor)
-                   + spec * uLightColor * mix(0.04, 1.0, uMetallic);
-    FragColor      = vec4(col, albedo.a);
+    // -- Directional lights --------------------------------------
+    for (int i = 0; i < uDirCount; i++) {
+        vec3  L    = normalize(-uDirDir[i]);
+        vec3  H    = normalize(L + V);
+        float diff = max(dot(N, L), 0.0);
+        float spec = pow(max(dot(N, H), 0.0), shininess);
+        Lo += albedo.rgb * diff * uDirColor[i]
+            + spec * uDirColor[i] * mix(0.04, 1.0, uMetallic);
+    }
+
+    // -- Spot lights --------------------------------------
+    for(int i = 0; i < uSpotCount; i++)
+	{
+		vec3 toFrag = vWorldPos - uSpotPos[i];
+		float dist = length(toFrag);
+		if(dist > uSpotRange[i]) continue;
+		vec3 L = normalize(-toFrag);
+		float cosA = dot(normalize(toFrag), normalize(uSpotDir[i]));
+		float cone = smoothstep(uSpotCosOuter[i], uSpotCosInner[i], cosA);
+		if(cone <= 0.0) continue;
+		float atten = cone * (1.0 - dist / uSpotRange[i]);
+		vec3 H = normalize(L + V);
+		float diff = max(dot(N, L), 0.0);
+		float spec = pow(max(dot(N, H), 0.0), shininess);
+		Lo += (albedo.rgb * diff + spec * mix(0.04, 1.0, uMetallic)) * uSpotColor[i] * atten;
+	}
+
+    // -- Ambient --------------------------------------
+    vec3 col = albedo.rgb * uAmbient + Lo;
+    FragColor = vec4(col, albedo.a);
 }";
 
         // Grid / wireframe

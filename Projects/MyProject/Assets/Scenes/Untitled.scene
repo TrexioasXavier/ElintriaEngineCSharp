@@ -1,5 +1,187 @@
 {
   "Name": "Untitled",
   "Version": 1,
-  "GameObjects": []
+  "GameObjects": [
+    {
+      "InstanceId": 1,
+      "Name": "Cube",
+      "ActiveSelf": true,
+      "Tag": "Untagged",
+      "Layer": "Default",
+      "Position": [
+        5.789101E-06,
+        0.3360002,
+        0.7680001
+      ],
+      "Rotation": [
+        132,
+        48,
+        0
+      ],
+      "Scale": [
+        1,
+        1,
+        1
+      ],
+      "Components": [
+        {
+          "TypeName": "MeshFilter",
+          "Enabled": true,
+          "Properties": {
+            "MeshPath": "",
+            "MeshName": "Cube"
+          }
+        },
+        {
+          "TypeName": "MeshRenderer",
+          "Enabled": true,
+          "Properties": {
+            "MaterialPath": "",
+            "CastShadows": true,
+            "ReceiveShadows": true,
+            "AlbedoR": 0.8,
+            "AlbedoG": 0.82,
+            "AlbedoB": 0.85,
+            "Metallic": 0,
+            "Roughness": 0.6
+          }
+        },
+        {
+          "TypeName": "NewScript",
+          "Enabled": true,
+          "Properties": {
+            "speed": 5,
+            "active": true,
+            "target": null
+          }
+        }
+      ],
+      "Children": []
+    },
+    {
+      "InstanceId": 2,
+      "Name": "Camera",
+      "ActiveSelf": true,
+      "Tag": "Untagged",
+      "Layer": "Default",
+      "Position": [
+        0,
+        0,
+        0
+      ],
+      "Rotation": [
+        0,
+        0,
+        0
+      ],
+      "Scale": [
+        1,
+        1,
+        1
+      ],
+      "Components": [
+        {
+          "TypeName": "Camera",
+          "Enabled": true,
+          "Properties": {
+            "FieldOfView": 60,
+            "NearClip": 0.1,
+            "FarClip": 1000,
+            "IsOrthographic": false,
+            "OrthoSize": 5,
+            "BackgroundR": 0.1,
+            "BackgroundG": 0.1,
+            "BackgroundB": 0.1,
+            "Forward": [
+              0,
+              -0,
+              -1
+            ],
+            "Position": [
+              0,
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "Children": []
+    },
+    {
+      "InstanceId": 3,
+      "Name": "Point Light",
+      "ActiveSelf": true,
+      "Tag": "Untagged",
+      "Layer": "Default",
+      "Position": [
+        0,
+        7.0079947,
+        0
+      ],
+      "Rotation": [
+        0,
+        0,
+        0
+      ],
+      "Scale": [
+        1,
+        1,
+        1
+      ],
+      "Components": [
+        {
+          "TypeName": "Light",
+          "Enabled": true,
+          "Properties": {
+            "LightType": "Directional",
+            "ColorR": 1,
+            "ColorG": 1,
+            "ColorB": 1,
+            "Intensity": 1,
+            "Range": 10,
+            "SpotAngle": 30
+          }
+        }
+      ],
+      "Children": []
+    },
+    {
+      "InstanceId": 4,
+      "Name": "Directional Light",
+      "ActiveSelf": true,
+      "Tag": "Untagged",
+      "Layer": "Default",
+      "Position": [
+        0,
+        7.199994,
+        0
+      ],
+      "Rotation": [
+        0,
+        0,
+        0
+      ],
+      "Scale": [
+        1,
+        1,
+        1
+      ],
+      "Components": [
+        {
+          "TypeName": "Light",
+          "Enabled": true,
+          "Properties": {
+            "LightType": "Directional",
+            "ColorR": 1,
+            "ColorG": 1,
+            "ColorB": 1,
+            "Intensity": 1,
+            "Range": 10,
+            "SpotAngle": 30
+          }
+        }
+      ],
+      "Children": []
+    }
+  ]
 }

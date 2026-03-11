@@ -421,6 +421,7 @@ namespace ElintriaEngine.Build
             src.AppendLine("        GL.ClearColor(0.08f, 0.08f, 0.10f, 1f);");
             src.AppendLine("        GL.Enable(EnableCap.DepthTest);");
             src.AppendLine("        _renderer.Init();");
+            src.AppendLine("        _renderer.IsPlayMode = true;  // game build always uses play-mode rendering");
             src.AppendLine();
             src.AppendLine("        // Initialise 2-D UI renderer (font optional)");
             src.AppendLine("        string fontPath = Path.Combine(AppContext.BaseDirectory, \"Fonts\", \"RobotoMono-Regular.ttf\");");
@@ -506,7 +507,6 @@ namespace ElintriaEngine.Build
             src.AppendLine("            { _lastW = w; _lastH = h; GL.Viewport(0, 0, w, h); }");
             src.AppendLine();
             src.AppendLine("        _runner.Tick(args.Time);");
-            src.AppendLine("        SetSceneCamera(w, h);");
             src.AppendLine();
             src.AppendLine("        // ── Phase 1: 3-D scene ────────────────────────────────────────");
             src.AppendLine("        GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);");
@@ -524,43 +524,6 @@ namespace ElintriaEngine.Build
             src.AppendLine("    }");
             src.AppendLine();
 
-            // SetSceneCamera unchanged
-            src.AppendLine("    private void SetSceneCamera(int w, int h)");
-            src.AppendLine("    {");
-            src.AppendLine("        foreach (var go in _scene.All())");
-            src.AppendLine("        {");
-            src.AppendLine("            var cam = go.GetComponent<Camera>();");
-            src.AppendLine("            if (cam == null || !cam.Enabled) continue;");
-            src.AppendLine("            var t   = go.Transform;");
-            src.AppendLine("            float yr  = MathHelper.DegreesToRadians(t.LocalEulerAngles.Y);");
-            src.AppendLine("            float xr  = MathHelper.DegreesToRadians(t.LocalEulerAngles.X);");
-            src.AppendLine("            var fwd   = new Vector3(");
-            src.AppendLine("                MathF.Sin(yr) * MathF.Cos(xr),");
-            src.AppendLine("               -MathF.Sin(xr),");
-            src.AppendLine("               -MathF.Cos(yr) * MathF.Cos(xr));");
-            src.AppendLine("            var view  = Matrix4.LookAt(t.LocalPosition, t.LocalPosition + fwd, Vector3.UnitY);");
-            src.AppendLine("            Matrix4 proj;");
-            src.AppendLine("            if (cam.IsOrthographic)");
-            src.AppendLine("            {");
-            src.AppendLine("                float ratio = w / (float)h;");
-            src.AppendLine("                proj = Matrix4.CreateOrthographic(");
-            src.AppendLine("                    cam.OrthoSize * ratio * 2, cam.OrthoSize * 2,");
-            src.AppendLine("                    cam.NearClip, cam.FarClip);");
-            src.AppendLine("            }");
-            src.AppendLine("            else");
-            src.AppendLine("            {");
-            src.AppendLine("                proj = Matrix4.CreatePerspectiveFieldOfView(");
-            src.AppendLine("                    MathHelper.DegreesToRadians(cam.FieldOfView),");
-            src.AppendLine("                    w / (float)h, cam.NearClip, cam.FarClip);");
-            src.AppendLine("            }");
-            src.AppendLine("            _renderer.GameViewMatrix = view;");
-            src.AppendLine("            _renderer.GameProjMatrix = proj;");
-            src.AppendLine("            return;");
-            src.AppendLine("        }");
-            src.AppendLine("        _renderer.GameViewMatrix = null;");
-            src.AppendLine("        _renderer.GameProjMatrix = null;");
-            src.AppendLine("    }");
-            src.AppendLine();
             src.AppendLine("    protected override void OnMouseDown(MouseButtonEventArgs e)");
             src.AppendLine("    {");
             src.AppendLine("        base.OnMouseDown(e);");
@@ -840,8 +803,9 @@ namespace ElintriaEngine.Build
             int charsPerLine = Math.Max(10, (int)(logUsableW / LogCharWidth));
 
             float ly = logRect.Y + 2f - ScrollOffset;
-            foreach (var entry in _log)
+            for (int i = 0; i < _log.Count; i++)
             {
+                var entry = _log[i];
                 Color tc = entry.Level switch
                 {
                     LogLevel.Error => CLogError,

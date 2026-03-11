@@ -1,5 +1,6 @@
 using System;
 using ElintriaEngine.Core;
+using OpenTK.Mathematics;
 
 namespace GameScripts
 {
@@ -8,7 +9,7 @@ namespace GameScripts
         // ── Public fields (visible in Inspector) ──────────────────────────────
         public float speed  = 5.0f;
         public bool  active = true;
-        public bool  debug  = false;  
+        public GameObject target;
 
         // Called once before the first frame — like Unity's Start()
         public override void OnStart()
@@ -19,15 +20,13 @@ namespace GameScripts
         // Called every frame — like Unity's Update()
         public override void OnUpdate(double deltaTime)
         {
-            Console.WriteLine($"NewScript updating on {GameObject?.Name} with deltaTime {deltaTime}");
+            target?.Transform.LocalEulerAngles = new Vector3(0, (float)(deltaTime * speed), 0);
+
         }
 
         // Called after all Updates — like Unity's LateUpdate()
         public override void OnLateUpdate(double deltaTime)
         {
-            Console.WriteLine($"NewScript late updating on {GameObject?.Name} with deltaTime {deltaTime}");
-
-
         }
 
         // Called at a fixed rate (50 Hz) — like Unity's FixedUpdate()

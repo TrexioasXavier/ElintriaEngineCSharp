@@ -134,27 +134,142 @@ namespace ElintriaEngine.Core
 
     public class MeshRenderer : Component
     {
-        public string MaterialPath { get; set; } = "";
-        public bool CastShadows { get; set; } = true;
-        public bool ReceiveShadows { get; set; } = true;
+        public string MaterialPath = "";
+        public bool CastShadows = true;
+        public bool ReceiveShadows = true;
+        // Per-object albedo colour (RGB, 0-1)
+        public float AlbedoR = 0.8f;
+        public float AlbedoG = 0.82f;
+        public float AlbedoB = 0.85f;
+        public float Metallic = 0f;
+        public float Roughness = 0.6f;
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  Camera  —  used by the game runtime and play-mode Game View.
+    //  Attach to any GameObject, position/rotate the GO to move the camera.
+    //  The first enabled Camera in the scene is the active camera.
+    // ═══════════════════════════════════════════════════════════════════════════
     public class Camera : Component
     {
-        public float FieldOfView { get; set; } = 60f;
-        public float NearClip { get; set; } = 0.1f;
-        public float FarClip { get; set; } = 1000f;
-        public bool IsOrthographic { get; set; } = false;
-        public float OrthoSize { get; set; } = 5f;
+        /// Vertical field of view in degrees (perspective mode only).
+        public float FieldOfView = 60f;
+        /// Near clip plane distance.
+        public float NearClip = 0.1f;
+        /// Far clip plane distance.
+        public float FarClip = 1000f;
+        /// Switches the camera to orthographic projection.
+        public bool IsOrthographic = false;
+        /// Half-height of the orthographic frustum in world units.
+        public float OrthoSize = 5f;
+        /// Solid background colour shown when no skybox is used.
+        public float BackgroundR = 0.1f;
+        public float BackgroundG = 0.1f;
+        public float BackgroundB = 0.1f;
+
+        // ── Runtime helpers ───────────────────────────────────────────────────
+        /// World-space forward vector derived from the owner GameObject's rotation.
+        public Vector3 Forward
+        {
+            get
+            {
+                var e = GameObject?.Transform.LocalEulerAngles ?? Vector3.Zero;
+                float yr = MathHelper.DegreesToRadians(e.Y);
+                float xr = MathHelper.DegreesToRadians(e.X);
+                return new Vector3(
+                     MathF.Sin(yr) * MathF.Cos(xr),
+                    -MathF.Sin(xr),
+                    -MathF.Cos(yr) * MathF.Cos(xr));
+            }
+        }
+
+        public Vector3 Position => GameObject?.Transform.LocalPosition ?? Vector3.Zero;
+
+        public Matrix4 GetViewMatrix()
+        {
+            var pos = Position;
+            return Matrix4.LookAt(pos, pos + Forward, Vector3.UnitY);
+        }
+
+        public Matrix4 GetProjectionMatrix(float aspect)
+        {
+            if (IsOrthographic)
+                return Matrix4.CreateOrthographic(
+                    OrthoSize * aspect * 2f, OrthoSize * 2f, NearClip, FarClip);
+            return Matrix4.CreatePerspectiveFieldOfView(
+                MathHelper.DegreesToRadians(FieldOfView), aspect, NearClip, FarClip);
+        }
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  DirectionalLight  —  infinite parallel light (like the sun).
+    //  The direction comes from the GameObject's rotation (local -Z forward).
+    // ═══════════════════════════════════════════════════════════════════════════
+    public class DirectionalLight : Component
+    {
+        public float ColorR = 1f;
+        public float ColorG = 0.95f;
+        public float ColorB = 0.9f;
+        public float Intensity = 1.2f;
+
+        public Vector3 Direction
+        {
+            get
+            {
+                var e = GameObject?.Transform.LocalEulerAngles ?? new Vector3(-45f, 45f, 0f);
+                float yr = MathHelper.DegreesToRadians(e.Y);
+                float xr = MathHelper.DegreesToRadians(e.X);
+                return new Vector3(
+                     MathF.Sin(yr) * MathF.Cos(xr),
+                    -MathF.Sin(xr),
+                    -MathF.Cos(yr) * MathF.Cos(xr));
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  SpotLight  —  cone light with position, direction, range, and angle.
+    //  Direction comes from the GameObject's rotation like DirectionalLight.
+    // ═══════════════════════════════════════════════════════════════════════════
+    public class SpotLight : Component
+    {
+        public float ColorR = 1f;
+        public float ColorG = 1f;
+        public float ColorB = 1f;
+        public float Intensity = 1f;
+        /// Radius in world units beyond which the light has zero effect.
+        public float Range = 15f;
+        /// Half-angle of the spotlight cone in degrees.
+        public float SpotAngle = 30f;
+        /// Softness of the cone edge (0 = hard, 1 = fully soft).
+        public float BlendFraction = 0.15f;
+
+        public Vector3 Position => GameObject?.Transform.LocalPosition ?? Vector3.Zero;
+        public Vector3 Direction
+        {
+            get
+            {
+                var e = GameObject?.Transform.LocalEulerAngles ?? Vector3.Zero;
+                float yr = MathHelper.DegreesToRadians(e.Y);
+                float xr = MathHelper.DegreesToRadians(e.X);
+                return new Vector3(
+                     MathF.Sin(yr) * MathF.Cos(xr),
+                    -MathF.Sin(xr),
+                    -MathF.Cos(yr) * MathF.Cos(xr));
+            }
+        }
+    }
+
+    // Legacy Light stub kept for scene serialisation compatibility.
     public class Light : Component
     {
-        public string LightType { get; set; } = "Directional";
-        public Color4 Color { get; set; } = Color4.White;
-        public float Intensity { get; set; } = 1f;
-        public float Range { get; set; } = 10f;
-        public float SpotAngle { get; set; } = 30f;
+        public string LightType = "Directional";
+        public float ColorR = 1f;
+        public float ColorG = 1f;
+        public float ColorB = 1f;
+        public float Intensity = 1f;
+        public float Range = 10f;
+        public float SpotAngle = 30f;
     }
 
     public class Rigidbody : Component
@@ -264,7 +379,9 @@ namespace ElintriaEngine.Core
             { "Slider",          typeof(SliderComponent) },
             // DynamicScript must be explicitly registered so scene
             // serialization can round-trip script placeholders correctly.
-            { "DynamicScript",   typeof(DynamicScript)   },
+            { "DynamicScript",      typeof(DynamicScript)      },
+            { "DirectionalLight",   typeof(DirectionalLight)   },
+            { "SpotLight",          typeof(SpotLight)          },
         };
 
         /// <summary>

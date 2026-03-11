@@ -58,6 +58,8 @@ namespace ElintriaEngine.Core
         public string Name { get; set; } = "";
         public ProjectType Type { get; set; } = ProjectType.ThreeD;
         public DateTime LastOpenedAt { get; set; } = DateTime.UtcNow;
+        /// <summary>Last scene file opened in this project (absolute path). Auto-loaded on open.</summary>
+        public string LastScenePath { get; set; } = "";
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -298,6 +300,52 @@ namespace ElintriaEngine.Core
             SaveManifest(manifest);
             RegisterProject(manifest);
             return manifest;
+        }
+
+        // ── Per-project last-scene tracking ────────────────────────────────────
+        /// <summary>
+        /// Saves the path of the last open scene for a project so it can be
+        /// auto-loaded next time the project is opened.
+        /// </summary>
+        public static void SaveLastScene(string projectRoot, string scenePath)
+        {
+            try
+            {
+                var reg = LoadRegistry();
+                // Find the entry whose manifest lives in this project root
+                string manifestPath = Path.Combine(projectRoot, "project.elintria");
+                foreach (var entry in reg.Projects)
+                {
+                    if (string.Equals(entry.ManifestPath, manifestPath,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        entry.LastScenePath = scenePath;
+                        SaveRegistry(reg);
+                        return;
+                    }
+                }
+            }
+            catch (Exception ex)
+            { Console.WriteLine($"[PM] SaveLastScene: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// Returns the last scene path for a project, or empty string if none saved.
+        /// </summary>
+        public static string LoadLastScene(string projectRoot)
+        {
+            try
+            {
+                var reg = LoadRegistry();
+                string manifestPath = Path.Combine(projectRoot, "project.elintria");
+                foreach (var entry in reg.Projects)
+                    if (string.Equals(entry.ManifestPath, manifestPath,
+                            StringComparison.OrdinalIgnoreCase))
+                        return entry.LastScenePath ?? "";
+            }
+            catch (Exception ex)
+            { Console.WriteLine($"[PM] LoadLastScene: {ex.Message}"); }
+            return "";
         }
 
         // ── Delete / Remove ───────────────────────────────────────────────────

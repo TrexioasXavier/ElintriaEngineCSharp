@@ -46,10 +46,44 @@ namespace ElintriaEngine.UI.Panels
         private string _addCompFilter = "";
         private RectangleF _addCompRect;
         private List<string> _compMatches = new();
+
+        // ── Color picker state ────────────────────────────────────────────────
+        // When open, we show RGB sliders + hue bar for a float R/G/B triplet.
+        private string? _colorPickerId;       // field group id of the open picker
+        private float _cpR, _cpG, _cpB;     // current values
+        private Action<float, float, float>? _cpApply;  // writes back (r,g,b)
+
+        // ── GameObject / Component drag-drop target ───────────────────────────
+        // Set by EditorLayout when a Hierarchy GO drag hovers over the inspector.
+        // Key = field id, Value = pending drop GO.
+        private string? _pendingDropFieldId;
+        private GameObject? _pendingDropGO;
+        public void AcceptGODrop(string fieldId, GameObject go)
+        { _pendingDropFieldId = fieldId; _pendingDropGO = go; }
+
+        // Called once per frame by EditorLayout so inspector can apply queued drops
+        public void FlushGODrops()
+        {
+            if (_pendingDropFieldId == null || _pendingDropGO == null) return;
+            foreach (var f in _fields)
+            {
+                if (f.Id != _pendingDropFieldId) continue;
+                if (f.FieldType == typeof(Core.GameObject))
+                    f.Setter(_pendingDropGO);
+                break;
+            }
+            _pendingDropFieldId = null; _pendingDropGO = null;
+        }
+
+        // Highlight field id when hovering a GO drag over it
+        public string? HoveredDropFieldId { get; set; }
         private static readonly string[] AllComponents =
         {
-            "MeshFilter","MeshRenderer","Camera","Light","Rigidbody",
-            "BoxCollider","SphereCollider","AudioSource","AudioListener",
+            "MeshFilter","MeshRenderer",
+            "Camera",
+            "DirectionalLight","SpotLight",
+            "Rigidbody","BoxCollider","SphereCollider",
+            "AudioSource","AudioListener",
             "CanvasComponent","CanvasRenderer","ImageComponent","ButtonComponent",
             "TextComponent","SliderComponent"
         };
@@ -248,10 +282,46 @@ namespace ElintriaEngine.UI.Panels
                                             BindingFlags.FlattenHierarchy)
                     .Select(f => f.Name));
 
-            foreach (var fi in comp.GetType().GetFields(
-                BindingFlags.Public | BindingFlags.Instance | BindingFlags.FlattenHierarchy))
+            // Pre-scan for Color R/G/B triplet pattern
+            var allFields = comp.GetType()
+                .GetFields(BindingFlags.Public | BindingFlags.Instance | BindingFlags.FlattenHierarchy)
+                .Where(f => !componentBaseFields.Contains(f.Name))
+                .ToList();
+
+            var skipRGB = new System.Collections.Generic.HashSet<string>();
+            for (int fi2 = 0; fi2 < allFields.Count - 2; fi2++)
             {
-                if (componentBaseFields.Contains(fi.Name)) continue;
+                var fR = allFields[fi2];
+                var fG = allFields[fi2 + 1];
+                var fB = allFields[fi2 + 2];
+                if (fR.FieldType == typeof(float) && fG.FieldType == typeof(float) &&
+                    fB.FieldType == typeof(float) &&
+                    fR.Name == "ColorR" && fG.Name == "ColorG" && fB.Name == "ColorB")
+                {
+                    skipRGB.Add(fR.Name); skipRGB.Add(fG.Name); skipRGB.Add(fB.Name);
+                    // Draw as a Color4 swatch + picker
+                    float rV = (float)(fR.GetValue(comp) ?? 0f);
+                    float gV = (float)(fG.GetValue(comp) ?? 0f);
+                    float bV = (float)(fB.GetValue(comp) ?? 0f);
+                    var c4v = new Color4(rV, gV, bV, 1f);
+                    DrawColorField(r, cr, "Color", c4v, ref y, cid + "_rgb");
+                    // Wire picker apply back to the three fields
+                    if (_colorPickerId == cid + "_rgb" && _cpApply == null)
+                    {
+                        _cpR = rV; _cpG = gV; _cpB = bV;
+                        _cpApply = (rv, gv, bv) =>
+                        {
+                            fR.SetValue(comp, rv);
+                            fG.SetValue(comp, gv);
+                            fB.SetValue(comp, bv);
+                        };
+                    }
+                }
+            }
+
+            foreach (var fi in allFields)
+            {
+                if (skipRGB.Contains(fi.Name)) continue;
                 DrawAnyField(r, cr, fi.Name, fi.GetValue(comp), fi.FieldType,
                     cid + "_f_" + fi.Name, ref y, nv => fi.SetValue(comp, nv));
             }
@@ -405,8 +475,43 @@ namespace ElintriaEngine.UI.Panels
             if (type == typeof(string))
             { DrawStringField(r, cr, label, value as string ?? "", ref y, id, v => setter(v)); return; }
 
+            // ── GameObject reference field ─────────────────────────────────────
+            if (type == typeof(Core.GameObject))
+            { DrawObjectRefField(r, cr, label, value as Core.GameObject, ref y, id, v => setter(v)); return; }
+
+            // ── Component reference field ─────────────────────────────────────
+            if (typeof(Core.Component).IsAssignableFrom(type))
+            { DrawObjectRefField(r, cr, label, value as Core.Component, ref y, id, v => setter(v)); return; }
+
             // Fallback – display as read-only text
             DrawLabelRow(r, cr, label, value?.ToString() ?? "null", ref y);
+        }
+
+        private void DrawObjectRefField(IEditorRenderer r, RectangleF cr, string label,
+            object? value, ref float y, string id, Action<object?> setter)
+        {
+            DrawLabel(r, cr, label, y);
+            float fw = cr.Width - LW - PAD;
+            var fr = new RectangleF(cr.X + LW, y + 2f, fw, FH - 4f);
+
+            // Hover highlight when a drag is active
+            bool isHovering = HoveredDropFieldId == id;
+            Color bg = isHovering ? Color.FromArgb(255, 40, 80, 140)
+                                  : Color.FromArgb(255, 38, 38, 44);
+            r.FillRect(fr, bg);
+            r.DrawRect(fr, isHovering ? Color.FromArgb(255, 80, 160, 255) : ColBorder);
+
+            string display = value == null ? "None (drag to assign)" :
+                             value is Core.GameObject go ? go.Name :
+                             value is Core.Component cp ? (cp.GameObject?.Name ?? cp.GetType().Name) :
+                             value.ToString() ?? "?";
+            r.DrawText(display, new PointF(fr.X + 4f, fr.Y + 3f),
+                value == null ? Color.FromArgb(160, 140, 140, 150) : Color.FromArgb(255, 200, 220, 255), 9f);
+
+            // Register for drops: store field type so EditorLayout can route correctly
+            _fields.Add(new FieldRecord(fr, id, value,
+                typeof(Core.GameObject), nv => setter(nv)));
+            y += FH; ContentHeight += FH;
         }
 
         // ── Individual field drawers ───────────────────────────────────────────
@@ -527,12 +632,145 @@ namespace ElintriaEngine.UI.Panels
             Color4 value, ref float y, string id)
         {
             DrawLabel(r, cr, label, y);
-            var fr = new RectangleF(cr.X + LW, y + 2f, cr.Width - LW - PAD, FH - 4f);
-            r.FillRect(fr, Color.FromArgb(
+            var swatch = new RectangleF(cr.X + LW, y + 2f, cr.Width - LW - PAD, FH - 4f);
+            r.FillRect(swatch, Color.FromArgb(
                 (int)(value.A * 255), (int)(value.R * 255),
                 (int)(value.G * 255), (int)(value.B * 255)));
-            r.DrawRect(fr, ColBorder);
+            r.DrawRect(swatch, ColBorder);
+            // Register as clickable
+            _fields.Add(new FieldRecord(swatch, "color_swatch_" + id,
+                value, typeof(Color4), _ => { }));
             y += FH; ContentHeight += FH;
+        }
+
+        // Full RGB + hue-bar color picker drawn inline below the swatch
+        private void DrawColorPicker(IEditorRenderer r, RectangleF cr, ref float y)
+        {
+            float ph = 160f;
+            var bg = new RectangleF(cr.X + 2f, y, cr.Width - 4f, ph);
+            r.FillRect(bg, Color.FromArgb(255, 30, 30, 35));
+            r.DrawRect(bg, ColBorder);
+
+            float px = bg.X + 8f;
+            float pw = bg.Width - 16f;
+            float iy = bg.Y + 8f;
+
+            // ── Hue bar (22 segments) ─────────────────────────────────────────
+            int hsegs = 22;
+            float sw = pw / hsegs;
+            for (int i = 0; i < hsegs; i++)
+            {
+                float hue = (float)i / hsegs;
+                HsvToRgb(hue, 1f, 1f, out float hr, out float hg, out float hb);
+                var seg = new RectangleF(px + i * sw, iy, sw + 0.5f, 16f);
+                r.FillRect(seg, Color.FromArgb(255, (int)(hr * 255), (int)(hg * 255), (int)(hb * 255)));
+
+                // Register hue click
+                _fields.Add(new FieldRecord(seg, $"cp_hue_{i}_{_colorPickerId}",
+                    hue, typeof(float), hv =>
+                    {
+                        // Apply selected hue while keeping current S/V from current RGB
+                        RgbToHsv(_cpR, _cpG, _cpB, out float _, out float s, out float v);
+                        HsvToRgb((float)hv, s, v, out float nr, out float ng, out float nb);
+                        _cpR = nr; _cpG = ng; _cpB = nb;
+                        _cpApply?.Invoke(_cpR, _cpG, _cpB);
+                    }));
+            }
+            // Marker on current hue
+            RgbToHsv(_cpR, _cpG, _cpB, out float curH, out float _, out float _2);
+            float mx = px + curH * pw;
+            r.DrawLine(new PointF(mx, iy), new PointF(mx, iy + 16f),
+                       Color.White, 2f);
+            iy += 22f;
+
+            // ── S/V gradient (5×5 grid approximation) ─────────────────────────
+            RgbToHsv(_cpR, _cpG, _cpB, out float curH2, out float curS, out float curV);
+            int svN = 5;
+            float svW = pw / svN, svH2 = 32f / svN;
+            for (int si = 0; si < svN; si++)
+                for (int vi = 0; vi < svN; vi++)
+                {
+                    float s = 1f - (float)si / (svN - 1);
+                    float v = (float)vi / (svN - 1);
+                    HsvToRgb(curH2, s, v, out float cr2, out float cg2, out float cb2);
+                    var cell = new RectangleF(px + vi * svW, iy + si * svH2, svW + 0.5f, svH2 + 0.5f);
+                    r.FillRect(cell, Color.FromArgb(255, (int)(cr2 * 255), (int)(cg2 * 255), (int)(cb2 * 255)));
+                    float fs = s, fv = v;
+                    _fields.Add(new FieldRecord(cell, $"cp_sv_{si}_{vi}_{_colorPickerId}",
+                        0f, typeof(float), _ =>
+                        {
+                            HsvToRgb(curH2, fs, fv, out float nr, out float ng, out float nb);
+                            _cpR = nr; _cpG = ng; _cpB = nb;
+                            _cpApply?.Invoke(_cpR, _cpG, _cpB);
+                        }));
+                }
+            iy += 34f + 2f;
+
+            // ── R / G / B sliders ─────────────────────────────────────────────
+            DrawColorSlider(r, px, pw, ref iy, "R", _cpR, Color.FromArgb(255, 220, 60, 60),
+                v => { _cpR = v; _cpApply?.Invoke(_cpR, _cpG, _cpB); }, $"cp_r_{_colorPickerId}");
+            DrawColorSlider(r, px, pw, ref iy, "G", _cpG, Color.FromArgb(255, 60, 200, 80),
+                v => { _cpG = v; _cpApply?.Invoke(_cpR, _cpG, _cpB); }, $"cp_g_{_colorPickerId}");
+            DrawColorSlider(r, px, pw, ref iy, "B", _cpB, Color.FromArgb(255, 80, 130, 255),
+                v => { _cpB = v; _cpApply?.Invoke(_cpR, _cpG, _cpB); }, $"cp_b_{_colorPickerId}");
+
+            // ── Preview swatch ────────────────────────────────────────────────
+            var prev = new RectangleF(px, iy, pw, 14f);
+            r.FillRect(prev, Color.FromArgb(255, (int)(_cpR * 255), (int)(_cpG * 255), (int)(_cpB * 255)));
+            r.DrawRect(prev, ColBorder);
+
+            y += ph; ContentHeight += ph;
+        }
+
+        private void DrawColorSlider(IEditorRenderer r, float x, float w, ref float y,
+            string label, float val, Color trackColor, Action<float> setter, string id)
+        {
+            r.DrawText(label, new PointF(x, y + 2f), Color.FromArgb(200, 200, 200, 200), 9f);
+            var track = new RectangleF(x + 14f, y + 2f, w - 14f, 11f);
+            r.FillRect(track, Color.FromArgb(255, 45, 45, 50));
+            r.FillRect(new RectangleF(track.X, track.Y, track.Width * val, track.Height), trackColor);
+            r.DrawRect(track, ColBorder);
+            // Thumb
+            float tx = track.X + track.Width * val - 3f;
+            r.FillRect(new RectangleF(tx, track.Y - 1f, 6f, track.Height + 2f), Color.White);
+            // Register drag
+            _fields.Add(new FieldRecord(track, id, val, typeof(float),
+                _ => { })); // drag handled via _dragSetter in float path
+            // We piggyback on the float drag system by adding a proper record:
+            _fields[_fields.Count - 1] = new FieldRecord(track, id, val, typeof(float),
+                nv => setter(Math.Clamp((float)(nv is float fv2 ? fv2 : 0f), 0f, 1f)));
+            y += 14f;
+        }
+
+        private static void HsvToRgb(float h, float s, float v, out float r, out float g, out float b)
+        {
+            if (s == 0) { r = g = b = v; return; }
+            float h6 = h * 6f;
+            int i = (int)h6 % 6;
+            float f = h6 - MathF.Floor(h6);
+            float p = v * (1 - s), q = v * (1 - s * f), t2 = v * (1 - s * (1 - f));
+            switch (i)
+            {
+                case 0: r = v; g = t2; b = p; break;
+                case 1: r = q; g = v; b = p; break;
+                case 2: r = p; g = v; b = t2; break;
+                case 3: r = p; g = q; b = v; break;
+                case 4: r = t2; g = p; b = v; break;
+                default: r = v; g = p; b = q; break;
+            }
+        }
+        private static void RgbToHsv(float r, float g, float b,
+            out float h, out float s, out float v)
+        {
+            float max = MathF.Max(r, MathF.Max(g, b));
+            float min = MathF.Min(r, MathF.Min(g, b));
+            v = max; float d = max - min;
+            s = max == 0 ? 0 : d / max;
+            if (d == 0) { h = 0; return; }
+            if (max == r) h = (g - b) / d + (g < b ? 6 : 0);
+            else if (max == g) h = (b - r) / d + 2;
+            else h = (r - g) / d + 4;
+            h /= 6f;
         }
 
         private void DrawLabelRow(IEditorRenderer r, RectangleF cr, string label,
@@ -617,9 +855,27 @@ namespace ElintriaEngine.UI.Panels
 
                     if (field.FieldType == typeof(bool))
                     {
-                        // Toggle bool
                         bool cur = field.Value is bool b && b;
                         field.Setter(!cur);
+                        return;
+                    }
+
+                    // Color swatch click — open / close inline picker
+                    if (field.Id.StartsWith("color_swatch_"))
+                    {
+                        string gid = field.Id["color_swatch_".Length..];
+                        if (_colorPickerId == gid)
+                        { _colorPickerId = null; return; } // close
+
+                        if (field.Value is Color4 c4)
+                        {
+                            _colorPickerId = gid;
+                            _cpR = c4.R; _cpG = c4.G; _cpB = c4.B;
+                            // The setter stored in the color field record doesn't carry the RGB—
+                            // we need to find the original field in the component to write back.
+                            // We stash _cpApply via the field record setter chain.
+                            _cpApply = (r2, g2, b2) => field.Setter(new Color4(r2, g2, b2, 1f));
+                        }
                         return;
                     }
 
@@ -732,6 +988,20 @@ namespace ElintriaEngine.UI.Panels
                 }
                 iy += 18f;
             }
+        }
+
+        // ── GameObject / object-ref drop helpers ─────────────────────────────
+        /// Returns the field id of the first object-ref field (typeof GameObject or Component)
+        /// that contains the given screen position, or null if none.
+        public string? GetObjectRefFieldAt(PointF pos)
+        {
+            foreach (var f in _fields)
+            {
+                if (f.FieldType != typeof(Core.GameObject) &&
+                    !typeof(Core.Component).IsAssignableFrom(f.FieldType)) continue;
+                if (f.Bounds.Contains(pos)) return f.Id;
+            }
+            return null;
         }
 
         // ── Script drop ───────────────────────────────────────────────────────

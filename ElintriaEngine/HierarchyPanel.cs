@@ -45,6 +45,9 @@ namespace ElintriaEngine.UI.Panels
 
         public void SetScene(Scene s) { _scene = s; _collapsed.Clear(); _hidden.Clear(); }
         public GameObject? Selected => _selected;
+        /// <summary>Non-null while the user is dragging a GO out of the hierarchy.</summary>
+        public GameObject? ActiveDragGO => _isDragging ? _dragGO : null;
+        public event Action<GameObject>? GODragStarted;
         public bool IsHidden(GameObject go) => _hidden.Contains(go.InstanceId);
 
         // ── Render ─────────────────────────────────────────────────────────────
@@ -271,7 +274,11 @@ namespace ElintriaEngine.UI.Panels
             {
                 float d = MathF.Sqrt(MathF.Pow(pos.X - _dragStart.X, 2) +
                                      MathF.Pow(pos.Y - _dragStart.Y, 2));
-                if (d > DragThresh) _isDragging = true;
+                if (d > DragThresh)
+                {
+                    _isDragging = true;
+                    if (_dragGO != null) GODragStarted?.Invoke(_dragGO);
+                }
             }
             if (_isDragging) _dropTarget = HitTest(pos).go;
         }

@@ -39,8 +39,14 @@ namespace ElintriaEngine.UI
         private volatile bool _scriptsCompiling = false;
         private volatile bool _pendingScriptRefresh = false;
         private PointF _mouse;
+        private Core.GameObject? _goDragActive;  // GO being dragged from hierarchy
         private string _projectRoot = "";
         private int _winW, _winH;
+
+        // ── Scene picker popup (File → Open Scene) ─────────────────────────────
+        private bool _showScenePicker;
+        private List<string> _sceneFiles = new();
+        private int _scenePickerHover = -1;
 
         /// <summary>Fired when the user clicks File → Return to Launcher.</summary>
         public event Action? ReturnToLauncher;
@@ -120,7 +126,45 @@ namespace ElintriaEngine.UI
             }
         }
 
-        public void Init() => SceneView.Init();
+        public void Init()
+        {
+            SceneView.Init();
+            AutoLoadLastScene();
+        }
+
+        private void AutoLoadLastScene()
+        {
+            try
+            {
+                string lastPath = Core.ProjectManager.LoadLastScene(_projectRoot);
+                if (!string.IsNullOrEmpty(lastPath) && System.IO.File.Exists(lastPath))
+                {
+                    LoadSceneFromFile(lastPath);
+                    Console.WriteLine($"[Editor] Auto-loaded last scene: {lastPath}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Editor] Auto-load scene failed: {ex.Message}");
+            }
+        }
+
+        private void LoadSceneFromFile(string path)
+        {
+            var loaded = Core.SceneSerializer.Load(path);
+            _scene = loaded;
+            Hierarchy.SetScene(_scene);
+            SceneView.SetScene(_scene);
+            BuildSettings.SetScene(_scene);
+            Inspector.Inspect(null);
+            // Re-resolve scripts so hot-reloaded types work immediately
+            Core.SceneRunner.LoadUserScripts(_projectRoot);
+            Core.SceneRunner.ResolveEditorScripts(_scene);
+            // Also load companion UI document if it exists
+            string uiPath = System.IO.Path.ChangeExtension(path, ".uidoc");
+            if (System.IO.File.Exists(uiPath))
+                _uiDocument = Core.UIDocumentSerializer.LoadFromFile(uiPath) ?? new Core.UIDocument();
+        }
 
         // ── Wire events ────────────────────────────────────────────────────────
         private void WireEvents(string projectRoot)
@@ -136,6 +180,8 @@ namespace ElintriaEngine.UI
                 if (file.Type == AssetType.Script)
                     Inspector.SetDropHighlight(Inspector.IsVisible && Inspector.ContainsPoint(_mouse));
             };
+
+            Hierarchy.GODragStarted += go => { _goDragActive = go; };
 
             MenuBar.NewScene += () => { _scene = new Core.Scene(); Hierarchy.SetScene(_scene); SceneView.SetScene(_scene); Inspector.Inspect(null); BuildSettings.SetScene(_scene); };
             MenuBar.SaveScene += SaveScene;
@@ -327,6 +373,8 @@ namespace ElintriaEngine.UI
             }
 
             _runner.Tick(dt);
+            SceneView.OnUpdate(dt);      // fly-cam WASD movement
+            Inspector.FlushGODrops();
         }
 
         // ── PHASE 1: 3D render — call BEFORE BeginFrame ────────────────────────
@@ -359,6 +407,13 @@ namespace ElintriaEngine.UI
             MenuBar.OnRender(r);
 
             // Drag ghost
+            if (_goDragActive != null)
+            {
+                var g = new RectangleF(_mouse.X + 12, _mouse.Y + 6, 140f, 18f);
+                r.FillRect(g, Color.FromArgb(220, 30, 35, 55));
+                r.DrawRect(g, Color.FromArgb(255, 80, 130, 255));
+                r.DrawText("GO: " + _goDragActive.Name, new PointF(g.X + 5, g.Y + 4), Color.FromArgb(255, 180, 210, 255), 10f);
+            }
             if (Project.ActiveDrag != null)
             {
                 var g = new RectangleF(_mouse.X + 12, _mouse.Y + 6, 120f, 18f);
@@ -366,12 +421,20 @@ namespace ElintriaEngine.UI
                 r.DrawRect(g, Color.FromArgb(255, 100, 130, 220));
                 r.DrawText(Project.ActiveDrag.Name, new PointF(g.X + 5, g.Y + 4), Color.White, 10f);
             }
+
+            // Scene picker popup
+            if (_showScenePicker)
+                DrawScenePicker(r);
         }
 
         // ── Input routing ──────────────────────────────────────────────────────
         public void OnMouseDown(MouseButtonEventArgs e, PointF pos)
         {
             _mouse = pos;
+
+            // Scene picker swallows all clicks when visible
+            if (_showScenePicker) { HandleScenePickerClick(pos); return; }
+
             if (MenuBar.OnMouseDown(e, pos)) return;
 
             if (BuildSettings.IsVisible && BuildSettings.ContainsPoint(pos))
@@ -405,6 +468,23 @@ namespace ElintriaEngine.UI
                 return;
             }
 
+            // Handle GO drop onto inspector object-ref field
+            if (_goDragActive != null && Inspector.IsVisible && Inspector.ContainsPoint(pos))
+            {
+                string? fid = Inspector.GetObjectRefFieldAt(pos);
+                if (fid != null)
+                    Inspector.AcceptGODrop(fid, _goDragActive);
+            }
+            _goDragActive = null;
+            Inspector.HoveredDropFieldId = null;
+            // Handle GO drop onto inspector object-ref fields
+            if (_goDragActive != null && Inspector.IsVisible && Inspector.ContainsPoint(pos))
+            {
+                string? fid = Inspector.GetObjectRefFieldAt(pos);
+                if (fid != null) Inspector.AcceptGODrop(fid, _goDragActive);
+            }
+            _goDragActive = null;
+            Inspector.HoveredDropFieldId = null;
             Inspector.SetDropHighlight(false);
             foreach (var p in PanelZOrder()) p.OnMouseUp(e, pos);
         }
@@ -412,6 +492,18 @@ namespace ElintriaEngine.UI
         public void OnMouseMove(PointF pos)
         {
             _mouse = pos;
+            UpdateScenePickerHover(pos);
+
+            // Highlight inspector object-ref field under cursor during hierarchy GO drag
+            if (_goDragActive != null && Inspector.IsVisible && Inspector.ContainsPoint(pos))
+            {
+                // Find closest GameObject field under mouse
+                Inspector.HoveredDropFieldId = Inspector.GetObjectRefFieldAt(pos);
+            }
+            else
+            {
+                Inspector.HoveredDropFieldId = null;
+            }
             MenuBar.OnMouseMove(pos);
 
             // Update drop highlight while dragging a script
@@ -471,13 +563,16 @@ namespace ElintriaEngine.UI
         {
             if (string.IsNullOrEmpty(_scene.FilePath))
             {
-                // Default location
-                string path = System.IO.Path.Combine(_projectRoot, "Assets", "Scenes", _scene.Name + ".scene");
+                string path = System.IO.Path.Combine(_projectRoot, "Assets", "Scenes",
+                                                     _scene.Name + ".scene");
                 System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
                 _scene.FilePath = path;
             }
             SceneSerializer.Save(_scene, _scene.FilePath);
             Console.WriteLine($"[Editor] Saved scene → {_scene.FilePath}");
+
+            // Remember this scene so it auto-loads next time the project is opened
+            Core.ProjectManager.SaveLastScene(_projectRoot, _scene.FilePath);
 
             // Save UIDocument alongside the scene (.uidoc file)
             string uiPath = System.IO.Path.ChangeExtension(_scene.FilePath, ".uidoc");
@@ -487,7 +582,146 @@ namespace ElintriaEngine.UI
 
         private void OpenScene()
         {
-            Console.WriteLine("[Editor] OpenScene: use file dialog (not yet implemented)");
+            // Scan the project's Scenes folder and show a picker overlay
+            string scenesDir = System.IO.Path.Combine(_projectRoot, "Assets", "Scenes");
+            _sceneFiles.Clear();
+            if (System.IO.Directory.Exists(scenesDir))
+            {
+                foreach (var f in System.IO.Directory.GetFiles(scenesDir, "*.scene",
+                             System.IO.SearchOption.AllDirectories))
+                    _sceneFiles.Add(f);
+            }
+
+            if (_sceneFiles.Count == 0)
+            {
+                Console.WriteLine("[Editor] No .scene files found in Assets/Scenes/");
+                return;
+            }
+
+            _showScenePicker = true;
+            _scenePickerHover = -1;
+        }
+
+        // ── Scene picker overlay ───────────────────────────────────────────────
+        private void DrawScenePicker(IEditorRenderer r)
+        {
+            // Centre the dialog in the window
+            float pw = Math.Min(500f, _winW - 80f);
+            float ph = Math.Min(60f + _sceneFiles.Count * 24f + 40f, _winH - 100f);
+            float px = (_winW - pw) / 2f;
+            float py = (_winH - ph) / 2f;
+            var dlg = new RectangleF(px, py, pw, ph);
+
+            // Dim background
+            r.FillRect(new RectangleF(0, 0, _winW, _winH), Color.FromArgb(140, 0, 0, 0));
+
+            // Dialog box
+            r.FillRect(dlg, Color.FromArgb(255, 28, 30, 36));
+            r.DrawRect(dlg, Color.FromArgb(255, 60, 130, 255), 2f);
+
+            // Title bar
+            var title = new RectangleF(dlg.X, dlg.Y, dlg.Width, 28f);
+            r.FillRect(title, Color.FromArgb(255, 38, 42, 58));
+            r.DrawText("Open Scene", new PointF(title.X + 10f, title.Y + 7f),
+                Color.FromArgb(255, 200, 215, 255), 12f);
+
+            // Close button
+            var closeBtn = new RectangleF(dlg.Right - 26f, dlg.Y + 4f, 22f, 20f);
+            r.FillRect(closeBtn, Color.FromArgb(255, 120, 40, 40));
+            r.DrawText("X", new PointF(closeBtn.X + 6f, closeBtn.Y + 4f), Color.White, 9f);
+
+            // Scene rows
+            float ry = dlg.Y + 34f;
+            for (int i = 0; i < _sceneFiles.Count; i++)
+            {
+                var row = ScenePickerRowRect(dlg, i);
+                bool hov = i == _scenePickerHover;
+                r.FillRect(row, hov ? Color.FromArgb(255, 50, 80, 130) : Color.FromArgb(255, 35, 37, 44));
+                r.DrawRect(row, Color.FromArgb(255, 50, 55, 70));
+
+                string name = System.IO.Path.GetFileNameWithoutExtension(_sceneFiles[i]);
+                string rel = TryMakeRelative(_sceneFiles[i], _projectRoot);
+                r.DrawText(name, new PointF(row.X + 8f, row.Y + 4f),
+                    Color.FromArgb(255, 210, 225, 255), 11f);
+                r.DrawText(rel, new PointF(row.X + 8f, row.Y + 16f),
+                    Color.FromArgb(180, 130, 140, 160), 8f);
+                ry += 24f;
+            }
+
+            // Cancel button
+            var cancelBtn = new RectangleF(dlg.X + (dlg.Width - 80f) / 2f, dlg.Bottom - 32f, 80f, 22f);
+            r.FillRect(cancelBtn, Color.FromArgb(255, 55, 55, 65));
+            r.DrawRect(cancelBtn, Color.FromArgb(255, 80, 80, 95));
+            r.DrawText("Cancel", new PointF(cancelBtn.X + 16f, cancelBtn.Y + 5f),
+                Color.FromArgb(255, 190, 190, 200), 10f);
+        }
+
+        private RectangleF ScenePickerRowRect(RectangleF dlg, int i)
+        {
+            float rowH = 24f;
+            return new RectangleF(dlg.X + 6f, dlg.Y + 34f + i * rowH, dlg.Width - 12f, rowH - 2f);
+        }
+
+        private static string TryMakeRelative(string path, string root)
+        {
+            try
+            {
+                var rel = System.IO.Path.GetRelativePath(root, path);
+                return rel.Length < path.Length ? rel : path;
+            }
+            catch { return path; }
+        }
+
+        private bool HandleScenePickerClick(PointF pos)
+        {
+            if (!_showScenePicker) return false;
+
+            float pw = Math.Min(500f, _winW - 80f);
+            float ph = Math.Min(60f + _sceneFiles.Count * 24f + 40f, _winH - 100f);
+            float px = (_winW - pw) / 2f;
+            float py = (_winH - ph) / 2f;
+            var dlg = new RectangleF(px, py, pw, ph);
+
+            // Close button
+            var closeBtn = new RectangleF(dlg.Right - 26f, dlg.Y + 4f, 22f, 20f);
+            if (closeBtn.Contains(pos)) { _showScenePicker = false; return true; }
+
+            // Cancel button
+            var cancelBtn = new RectangleF(dlg.X + (dlg.Width - 80f) / 2f, dlg.Bottom - 32f, 80f, 22f);
+            if (cancelBtn.Contains(pos)) { _showScenePicker = false; return true; }
+
+            // Scene rows
+            for (int i = 0; i < _sceneFiles.Count; i++)
+            {
+                var row = ScenePickerRowRect(dlg, i);
+                if (row.Contains(pos))
+                {
+                    _showScenePicker = false;
+                    LoadSceneFromFile(_sceneFiles[i]);
+                    Core.ProjectManager.SaveLastScene(_projectRoot, _sceneFiles[i]);
+                    Console.WriteLine($"[Editor] Loaded scene: {_sceneFiles[i]}");
+                    return true;
+                }
+            }
+
+            // Clicking outside the dialog closes it
+            if (!dlg.Contains(pos)) { _showScenePicker = false; return true; }
+            return true; // swallow all clicks while picker is open
+        }
+
+        private void UpdateScenePickerHover(PointF pos)
+        {
+            if (!_showScenePicker) return;
+            float pw = Math.Min(500f, _winW - 80f);
+            float py = (_winH - Math.Min(60f + _sceneFiles.Count * 24f + 40f, _winH - 100f)) / 2f;
+            float px = (_winW - pw) / 2f;
+            var dlg = new RectangleF(px, py, pw, 1f); // height unused for hover
+            _scenePickerHover = -1;
+            for (int i = 0; i < _sceneFiles.Count; i++)
+            {
+                var row = ScenePickerRowRect(new RectangleF(px, py, pw, 999f), i);
+                if (row.Contains(pos)) { _scenePickerHover = i; break; }
+            }
         }
 
         public void Dispose() { _watcher?.Dispose(); _runner.Dispose(); SceneView.Dispose(); }
