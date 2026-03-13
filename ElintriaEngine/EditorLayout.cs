@@ -58,6 +58,9 @@ namespace ElintriaEngine.UI
         private const float InspW = 270f;
         private const float ProjH = 200f;
 
+        // ── Docking ────────────────────────────────────────────────────────────
+        private DockManager _dock = null!;
+
         public EditorLayout(int winW, int winH, string projectRoot)
         {
             _winW = winW; _winH = winH; _projectRoot = projectRoot;
@@ -104,12 +107,36 @@ namespace ElintriaEngine.UI
 
             WireEvents(projectRoot);
 
-            // ── Lock all docked panels – they cannot be dragged or resized ────
-            Hierarchy.Locked = true;
-            Inspector.Locked = true;
-            SceneView.Locked = true;
-            Project.Locked = true;
-            // BuildSettings is a floating dialog – leave it unlocked
+            // ── Unlock all docked panels – DockManager handles bounds ─────────
+            Hierarchy.Locked = false;
+            Inspector.Locked = false;
+            SceneView.Locked = false;
+            Project.Locked = false;
+
+            // ── Build the initial dock tree ───────────────────────────────────
+            // Layout: [Hierarchy | [SceneView / Project] | Inspector]
+            float dockAreaX = 0f;
+            float dockAreaY = MenuH;
+            float dockAreaW = winW;
+            float dockAreaH = winH - MenuH;
+
+            var sceneProj = new SplitNode(false,
+                ratio: (dockAreaH - ProjH) / dockAreaH,
+                new LeafNode(SceneView),
+                new LeafNode(Project));
+
+            var midRight = new SplitNode(true,
+                ratio: (dockAreaW - HierW - InspW) / (dockAreaW - HierW),
+                sceneProj,
+                new LeafNode(Inspector));
+
+            var root = (DockNode)new SplitNode(true,
+                ratio: HierW / dockAreaW,
+                new LeafNode(Hierarchy),
+                midRight);
+
+            _dock = new DockManager(root,
+                new RectangleF(dockAreaX, dockAreaY, dockAreaW, dockAreaH));
 
             Hierarchy.SetScene(_scene);
             SceneView.SetScene(_scene);
@@ -288,7 +315,9 @@ namespace ElintriaEngine.UI
             SceneView.IsPlaying = true;
             SceneView.IsPaused = false;
             SceneView.UIDocument = _uiDocument;
-            SceneView.ActiveTab = SceneViewPanel.ViewTab.Game;
+            // Don't force Game tab — let the user stay on whichever tab they're on.
+            // Scene tab continues to use the editor camera (navigable while playing).
+            // Game tab shows the runtime/game camera view.
             Inspector.Inspect(null);
 
             // If the watcher is currently compiling, wait for it to finish
@@ -446,6 +475,9 @@ namespace ElintriaEngine.UI
                 r.DrawText(Project.ActiveDrag.Name, new PointF(g.X + 5, g.Y + 4), Color.White, 10f);
             }
 
+            // ── Dock overlay (dividers + drop zones) — drawn last, above everything ──
+            _dock.DrawOverlay(r, _mouse);
+
             // Scene picker popup
             if (_showScenePicker)
                 DrawScenePicker(r);
@@ -468,6 +500,10 @@ namespace ElintriaEngine.UI
             if (ProjectSettings.IsVisible && ProjectSettings.ContainsPoint(pos))
             { ProjectSettings.OnMouseDown(e, pos); return; }
 
+            // DockManager gets first crack at dividers; panel header drag is shared
+            bool dockConsumed = _dock.OnMouseDown(e, pos);
+            if (dockConsumed) return;
+
             foreach (var p in PanelZOrder())
             {
                 if (p.ContainsPoint(pos))
@@ -483,7 +519,10 @@ namespace ElintriaEngine.UI
         {
             _mouse = pos;
 
-            // ── Script drop: fires on RELEASE (drag completes on MouseUp) ──────
+            // DockManager gets first crack at completing a dock drag/divider
+            if (_dock.OnMouseUp(e, pos)) return;
+
+            // ── Script drop ───────────────────────────────────────────────────
             if (Project.ActiveDrag != null
                 && Project.ActiveDrag.Type == AssetType.Script
                 && Inspector.IsVisible
@@ -491,12 +530,11 @@ namespace ElintriaEngine.UI
             {
                 Inspector.AcceptScriptDrop(Project.ActiveDrag.FullPath, _projectRoot);
                 Inspector.SetDropHighlight(false);
-                // Let the project panel clear ActiveDrag
                 foreach (var p in PanelZOrder()) p.OnMouseUp(e, pos);
                 return;
             }
 
-            // Handle GO drop onto inspector object-ref field
+            // ── GO drop onto inspector object-ref field ────────────────────────
             if (_goDragActive != null && Inspector.IsVisible && Inspector.ContainsPoint(pos))
             {
                 string? fid = Inspector.GetObjectRefFieldAt(pos);
@@ -505,15 +543,8 @@ namespace ElintriaEngine.UI
             }
             _goDragActive = null;
             Inspector.HoveredDropFieldId = null;
-            // Handle GO drop onto inspector object-ref fields
-            if (_goDragActive != null && Inspector.IsVisible && Inspector.ContainsPoint(pos))
-            {
-                string? fid = Inspector.GetObjectRefFieldAt(pos);
-                if (fid != null) Inspector.AcceptGODrop(fid, _goDragActive);
-            }
-            _goDragActive = null;
-            Inspector.HoveredDropFieldId = null;
             Inspector.SetDropHighlight(false);
+
             if (Preferences.IsVisible) Preferences.OnMouseUp(e, pos);
             if (ProjectSettings.IsVisible) ProjectSettings.OnMouseUp(e, pos);
             foreach (var p in PanelZOrder()) p.OnMouseUp(e, pos);
@@ -523,6 +554,12 @@ namespace ElintriaEngine.UI
         {
             _mouse = pos;
             UpdateScenePickerHover(pos);
+
+            // DockManager handles divider and panel-drag mouse move
+            _dock.OnMouseMove(pos);
+            // If the dock is actively dragging a panel, suppress panel mouse-move
+            // so panels don't react to mouseover during the drag
+            if (_dock.IsDragging) return;
 
             // Highlight inspector object-ref field under cursor during hierarchy GO drag
             if (_goDragActive != null && Inspector.IsVisible && Inspector.ContainsPoint(pos))
@@ -584,14 +621,10 @@ namespace ElintriaEngine.UI
             _winW = w; _winH = h;
             MenuBar.Resize(w);
 
-            float cntH = h - MenuH;
-            float midW = w - HierW - InspW;
-            float viewH = cntH - ProjH;
+            // Update the dock area and let the tree re-layout all panels
+            _dock.SetArea(new RectangleF(0f, MenuH, w, h - MenuH));
 
-            Hierarchy.Bounds = new RectangleF(0, MenuH, HierW, cntH);
-            Inspector.Bounds = new RectangleF(w - InspW, MenuH, InspW, cntH);
-            SceneView.Bounds = new RectangleF(HierW, MenuH, midW, viewH);
-            Project.Bounds = new RectangleF(HierW, MenuH + viewH, midW, ProjH);
+            // Floating dialogs stay centered
             BuildSettings.Bounds = new RectangleF(w / 2f - 240f, MenuH + 40f, 480f, 540f);
         }
 

@@ -31,6 +31,11 @@ namespace ElintriaEngine.UI.Panels
         private PointF _dragStart;
         private const float DragThresh = 6f;
 
+        // Pending selection: set on mouse-down but only fired as SelectionChanged
+        // on mouse-up when no drag happened. This prevents the inspector from
+        // switching away from GO-A while the user is click-dragging GO-B.
+        private GameObject? _pendingSelect;
+
         private GameObject? _lastClicked;
         private double _lastClickTime;
 
@@ -93,7 +98,7 @@ namespace ElintriaEngine.UI.Panels
             bool inView = (y + RowH > cr.Y) && (y < cr.Bottom);
             if (inView)
             {
-                bool sel = _selected == go;
+                bool sel = (_pendingSelect ?? _selected) == go;
                 bool hov = _hovered == go;
                 var row = new RectangleF(cr.X, y, cr.Width, RowH);
 
@@ -213,7 +218,7 @@ namespace ElintriaEngine.UI.Panels
 
             var (hit, onArrow, onEye) = HitTest(pos);
 
-            // Right-click always shows context menu
+            // Right-click always shows context menu — selection can change here
             if (e.Button == MouseButton.Right)
             {
                 _ctxTarget = hit;
@@ -222,9 +227,10 @@ namespace ElintriaEngine.UI.Panels
                 return;
             }
 
-            if (hit == null) { _selected = null; SelectionChanged?.Invoke(null); return; }
+            // Click on empty area — clear selection immediately
+            if (hit == null) { _selected = null; _pendingSelect = null; SelectionChanged?.Invoke(null); return; }
 
-            // Eye toggle
+            // Eye toggle — no selection change
             if (onEye)
             {
                 if (_hidden.Contains(hit.InstanceId)) _hidden.Remove(hit.InstanceId);
@@ -232,7 +238,7 @@ namespace ElintriaEngine.UI.Panels
                 return;
             }
 
-            // Collapse arrow
+            // Collapse arrow — no selection change
             if (onArrow && hit.Children.Count > 0)
             {
                 if (_collapsed.Contains(hit.InstanceId)) _collapsed.Remove(hit.InstanceId);
@@ -240,19 +246,27 @@ namespace ElintriaEngine.UI.Panels
                 return;
             }
 
-            // Double-click to rename
+            // Double-click to rename — only if already selected
             double now = Environment.TickCount64 / 1000.0;
             if (_lastClicked == hit && now - _lastClickTime < 0.4)
                 StartRename(hit);
             else { _lastClicked = hit; _lastClickTime = now; }
 
-            _selected = hit; SelectionChanged?.Invoke(hit);
-            _dragGO = hit; _dragStart = pos;
+            // Only update _pendingSelect (not _selected) so the row shows a hover-highlight
+            // without changing the inspector target. _selected is only confirmed on mouse-up
+            // when we know this was a plain click (not a drag-to-inspector-field).
+            // This prevents the inspector from losing focus on GO-A when the user starts
+            // dragging GO-B from the hierarchy.
+            _pendingSelect = hit;
+            _dragGO = hit;
+            _dragStart = pos;
         }
 
         public override void OnMouseUp(MouseButtonEventArgs e, PointF pos)
         {
-            if (_isDragging && _dragGO != null && _dropTarget != null
+            bool wasDragging = _isDragging;
+
+            if (wasDragging && _dragGO != null && _dropTarget != null
                 && _dropTarget != _dragGO
                 && !_dropTarget.IsDescendantOf(_dragGO))
             {
@@ -261,6 +275,15 @@ namespace ElintriaEngine.UI.Panels
                 _scene?.AddGameObject(_dragGO); // AddGameObject checks for duplicates
             }
             _isDragging = false; _dragGO = null; _dropTarget = null;
+
+            // If this was a plain click (no drag), fire SelectionChanged now so
+            // the inspector updates. We deliberately deferred this from mouse-down
+            // to prevent the inspector from losing GO-A focus while the user
+            // drags GO-B into an inspector object-ref field.
+            if (!wasDragging && _pendingSelect != null)
+                SelectionChanged?.Invoke(_pendingSelect);
+            _pendingSelect = null;
+
             base.OnMouseUp(e, pos);
         }
 

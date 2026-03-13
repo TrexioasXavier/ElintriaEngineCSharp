@@ -106,7 +106,28 @@ namespace ElintriaEngine.UI.Panels
         public void Render3D(int winW, int winH)
         {
             if (!IsVisible) return;
-            _sceneRenderer.Render(ViewportRect, _scene, winW, winH);
+
+            // Scene tab ALWAYS uses the editor camera and grid, regardless of play state.
+            // Game tab uses the game/runtime camera when playing.
+            if (_activeTab == ViewTab.Scene)
+            {
+                // Temporarily disable play-mode rendering flags so the editor
+                // camera and grid are used instead of the game camera.
+                bool savedPlay = _sceneRenderer.IsPlayMode;
+                var savedGV = _sceneRenderer.GameViewMatrix;
+                var savedGP = _sceneRenderer.GameProjMatrix;
+                _sceneRenderer.IsPlayMode = false;
+                _sceneRenderer.GameViewMatrix = null;
+                _sceneRenderer.GameProjMatrix = null;
+                _sceneRenderer.Render(ViewportRect, _scene, winW, winH);
+                _sceneRenderer.IsPlayMode = savedPlay;
+                _sceneRenderer.GameViewMatrix = savedGV;
+                _sceneRenderer.GameProjMatrix = savedGP;
+            }
+            else
+            {
+                _sceneRenderer.Render(ViewportRect, _scene, winW, winH);
+            }
         }
 
         public override void OnRender(IEditorRenderer r)
@@ -277,7 +298,7 @@ namespace ElintriaEngine.UI.Panels
                     TickParticlesRecursive(go, (float)dt);
             }
 
-            if (!_rightHeld || _activeTab != ViewTab.Scene) return;
+            if (!_rightHeld) return;
             if (!(_flyW || _flyS || _flyA || _flyD || _flyQ || _flyE)) return;
 
             var cam = _sceneRenderer.Camera;
@@ -309,21 +330,22 @@ namespace ElintriaEngine.UI.Panels
             float dx = pos.X - _lastMouse.X;
             float dy = pos.Y - _lastMouse.Y;
             _lastMouse = pos;
-            if (_activeTab != ViewTab.Scene) { base.OnMouseMove(pos); return; }
 
-            if (_handleDragging && Gizmos.HandleTarget != null) { ApplyHandleDrag(dx, dy); return; }
+            // Gizmo handle drag — Scene tab only
+            if (_activeTab == ViewTab.Scene && _handleDragging && Gizmos.HandleTarget != null)
+            { ApplyHandleDrag(dx, dy); return; }
 
             var cam = _sceneRenderer.Camera;
 
             if (_rightHeld)
             {
-                // FPS-style: camera stays in position, view direction changes
+                // FPS look works in BOTH Scene and Game tabs — editor camera always navigable
                 float sens = Prefs.MouseSensitivity;
                 float yMult = Prefs.InvertYAxis ? -1f : 1f;
                 cam.LookAround(dx * sens, dy * sens * yMult);
                 return;
             }
-            if (_panning)
+            if (_panning && _activeTab == ViewTab.Scene)
             {
                 cam.Pan(dx, dy);
                 return;
@@ -386,11 +408,13 @@ namespace ElintriaEngine.UI.Panels
             if (!IsVisible) return;
             if (HeaderRect.Contains(pos)) { base.OnMouseDown(e, pos); return; }
 
-            if (_activeTab == ViewTab.Scene && ViewportRect.Contains(pos))
+            // Allow RMB navigation in BOTH Scene and Game tabs (editor camera is always navigable)
+            if (ViewportRect.Contains(pos))
             {
                 IsFocused = true;
                 _lastMouse = pos;
-                if (e.Button == MouseButton.Left) TryStartHandleDrag(pos);
+                if (e.Button == MouseButton.Left && _activeTab == ViewTab.Scene)
+                    TryStartHandleDrag(pos);
                 else if (e.Button == MouseButton.Right) _rightHeld = true;
                 else if (e.Button == MouseButton.Middle) _panning = true;
             }
@@ -445,7 +469,8 @@ namespace ElintriaEngine.UI.Panels
 
         public override void OnMouseScroll(float delta)
         {
-            if (!IsVisible || _activeTab != ViewTab.Scene) return;
+            if (!IsVisible) return;
+            // Scroll zooms the editor camera in both Scene and Game tabs
             float speed = Prefs.ScrollSpeed;
             _sceneRenderer.Camera.Distance =
                 Math.Clamp(_sceneRenderer.Camera.Distance * (1f - delta * speed), 0.05f, 2000f);
@@ -456,9 +481,9 @@ namespace ElintriaEngine.UI.Panels
         // ══════════════════════════════════════════════════════════════════════
         public override void OnKeyDown(KeyboardKeyEventArgs e)
         {
-            if (!IsFocused || _activeTab != ViewTab.Scene) return;
+            if (!IsFocused) return;
 
-            // Track fly keys — they activate only when RMB is held (checked in OnUpdate)
+            // Fly keys work in both Scene and Game tabs (editor camera always navigable)
             if (BindMatches(e, EditorAction.FlyForward)) _flyW = true;
             if (BindMatches(e, EditorAction.FlyBackward)) _flyS = true;
             if (BindMatches(e, EditorAction.FlyLeft)) _flyA = true;
@@ -466,8 +491,8 @@ namespace ElintriaEngine.UI.Panels
             if (BindMatches(e, EditorAction.FlyUp)) _flyE = true;
             if (BindMatches(e, EditorAction.FlyDown)) _flyQ = true;
 
-            // Tool / view shortcuts — only when NOT holding RMB
-            if (!_rightHeld)
+            // Tool / view shortcuts — Scene tab only, not while holding RMB
+            if (_activeTab == ViewTab.Scene && !_rightHeld)
             {
                 var cam = _sceneRenderer.Camera;
                 if (BindMatches(e, EditorAction.MoveTool))

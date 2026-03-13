@@ -34,7 +34,9 @@ namespace ElintriaEngine
 
         // Constructor takes no projectRoot — the launcher is always shown first.
         public EditorWindow(GameWindowSettings gs, NativeWindowSettings ns)
-            : base(gs, ns) { }
+            : base(gs, ns) {  
+
+        }
 
         protected override void OnLoad()
         {

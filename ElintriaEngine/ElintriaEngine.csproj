@@ -6,7 +6,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ApplicationIcon>ElintriaEnginePurple.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="ElintriaEnginePurple.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Aspose.Email" Version="26.1.0" />
