@@ -475,6 +475,10 @@ namespace ElintriaEngine.Core
         public T? GetComponent<T>() where T : Component =>
             Components.OfType<T>().FirstOrDefault();
 
+        /// <summary>Non-generic variant — used for inspector component drag-drop routing.</summary>
+        public Component? GetComponentByType(Type t) =>
+            Components.FirstOrDefault(c => t.IsAssignableFrom(c.GetType()));
+
         public bool HasComponent<T>() where T : Component =>
             Components.OfType<T>().Any();
 

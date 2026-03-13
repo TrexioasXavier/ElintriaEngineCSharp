@@ -46,6 +46,7 @@ namespace ElintriaEngine.UI.Panels
             set { _isPlaying = value; _sceneRenderer.IsPlayMode = value; }
         }
         public bool IsPaused { get; set; }
+        public bool PrefabDropHighlight { get; set; }
         public Core.UIDocument? UIDocument { get; set; }
 
         private GizmoRenderer Gizmos => _sceneRenderer.Gizmos;
@@ -139,6 +140,16 @@ namespace ElintriaEngine.UI.Panels
             var vp = ViewportRect;
             if (_activeTab == ViewTab.Scene) DrawSceneChrome(r, vp);
             else DrawGameChrome(r, vp);
+
+            if (PrefabDropHighlight)
+            {
+                r.FillRect(vp, Color.FromArgb(45, 80, 220, 90));
+                r.DrawRect(vp, Color.FromArgb(210, 80, 230, 110), 2f);
+                r.DrawText("Drop to Instantiate Prefab",
+                    new PointF(vp.X + vp.Width / 2f - 82f, vp.Y + vp.Height / 2f - 8f),
+                    Color.FromArgb(230, 130, 255, 145), 11f);
+            }
+
             r.DrawRect(Bounds, Color.FromArgb(255, 55, 55, 55), 1f);
         }
 

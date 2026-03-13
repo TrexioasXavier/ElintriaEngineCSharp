@@ -29,7 +29,7 @@ namespace ElintriaEngine.UI.Panels
         private GameObject? _dropTarget;
         private bool _isDragging;
         private PointF _dragStart;
-        private const float DragThresh = 6f;
+        private const float DragThresh = 10f;
 
         // Pending selection: set on mouse-down but only fired as SelectionChanged
         // on mouse-up when no drag happened. This prevents the inspector from
@@ -44,6 +44,7 @@ namespace ElintriaEngine.UI.Panels
         private const float EyeW = 20f;   // width of the visibility toggle column
 
         public event Action<GameObject?>? SelectionChanged;
+        public (int W, int H) ScreenSize { get; set; } = (1920, 1080);
 
         public HierarchyPanel(RectangleF bounds) : base("Hierarchy", bounds)
         { MinWidth = 150f; MinHeight = 120f; }
@@ -54,6 +55,15 @@ namespace ElintriaEngine.UI.Panels
         public GameObject? ActiveDragGO => _isDragging ? _dragGO : null;
         public event Action<GameObject>? GODragStarted;
         public bool IsHidden(GameObject go) => _hidden.Contains(go.InstanceId);
+        public bool PrefabDropHighlight { get; set; }
+
+        /// <summary>Programmatically select a GO and notify the inspector.</summary>
+        public void ForceSelect(GameObject go)
+        {
+            _selected = go;
+            _pendingSelect = null;
+            SelectionChanged?.Invoke(go);
+        }
 
         // ── Render ─────────────────────────────────────────────────────────────
         public override void OnRender(IEditorRenderer r)
@@ -90,6 +100,16 @@ namespace ElintriaEngine.UI.Panels
 
             if (_showCtx && _ctxMenu != null)
                 _ctxMenu.OnRender(r);
+
+            if (PrefabDropHighlight)
+            {
+                var cr2 = ContentRect;
+                r.FillRect(cr2, Color.FromArgb(45, 80, 220, 90));
+                r.DrawRect(cr2, Color.FromArgb(210, 80, 230, 110), 2f);
+                r.DrawText("Drop to Instantiate Prefab",
+                    new PointF(cr2.X + 8f, cr2.Y + cr2.Height / 2f - 8f),
+                    Color.FromArgb(230, 130, 255, 145), 10f);
+            }
         }
 
         private void DrawNode(IEditorRenderer r, GameObject go, int depth,
@@ -271,17 +291,19 @@ namespace ElintriaEngine.UI.Panels
                 && !_dropTarget.IsDescendantOf(_dragGO))
             {
                 _dragGO.SetParent(_dropTarget);
-                // Remove from scene root list if needed
-                _scene?.AddGameObject(_dragGO); // AddGameObject checks for duplicates
+                _scene?.AddGameObject(_dragGO);
             }
             _isDragging = false; _dragGO = null; _dropTarget = null;
 
-            // If this was a plain click (no drag), fire SelectionChanged now so
-            // the inspector updates. We deliberately deferred this from mouse-down
-            // to prevent the inspector from losing GO-A focus while the user
-            // drags GO-B into an inspector object-ref field.
-            if (!wasDragging && _pendingSelect != null)
+            // Always confirm selection on mouse-up.
+            // If the user dragged (reordering hierarchy), we still want to select
+            // the item they clicked, unless the pending select was cleared by a different
+            // path (e.g. right-click handled above).
+            if (_pendingSelect != null)
+            {
+                _selected = _pendingSelect;
                 SelectionChanged?.Invoke(_pendingSelect);
+            }
             _pendingSelect = null;
 
             base.OnMouseUp(e, pos);
@@ -394,6 +416,7 @@ namespace ElintriaEngine.UI.Panels
             }
 
             _ctxMenu = new ContextMenu(pos, items);
+            _ctxMenu.Reposition(ScreenSize.W, ScreenSize.H);
             _showCtx = true;
         }
 

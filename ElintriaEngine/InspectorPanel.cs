@@ -68,8 +68,26 @@ namespace ElintriaEngine.UI.Panels
             foreach (var f in _fields)
             {
                 if (f.Id != _pendingDropFieldId) continue;
+
                 if (f.FieldType == typeof(Core.GameObject))
+                {
+                    // Field expects a GameObject — pass directly
                     f.Setter(_pendingDropGO);
+                }
+                else if (typeof(Core.Component).IsAssignableFrom(f.FieldType))
+                {
+                    // Field expects a specific component type — extract it from the GO
+                    var comp = _pendingDropGO.GetComponentByType(f.FieldType);
+                    if (comp != null)
+                        f.Setter(comp);
+                    else
+                    {
+                        // GO doesn't have that component — show nothing silently
+                        // (could show error toast in future)
+                        Console.WriteLine(
+                            $"[Inspector] Dropped GO '{_pendingDropGO.Name}' has no {f.FieldType.Name} component.");
+                    }
+                }
                 break;
             }
             _pendingDropFieldId = null; _pendingDropGO = null;
@@ -561,18 +579,18 @@ namespace ElintriaEngine.UI.Panels
 
             // ── GameObject reference field ─────────────────────────────────────
             if (type == typeof(Core.GameObject))
-            { DrawObjectRefField(r, cr, label, value as Core.GameObject, ref y, id, v => setter(v)); return; }
+            { DrawObjectRefField(r, cr, label, value as Core.GameObject, ref y, id, v => setter(v), typeof(Core.GameObject)); return; }
 
             // ── Component reference field ─────────────────────────────────────
             if (typeof(Core.Component).IsAssignableFrom(type))
-            { DrawObjectRefField(r, cr, label, value as Core.Component, ref y, id, v => setter(v)); return; }
+            { DrawObjectRefField(r, cr, label, value as Core.Component, ref y, id, v => setter(v), type); return; }
 
             // Fallback – display as read-only text
             DrawLabelRow(r, cr, label, value?.ToString() ?? "null", ref y);
         }
 
         private void DrawObjectRefField(IEditorRenderer r, RectangleF cr, string label,
-            object? value, ref float y, string id, Action<object?> setter)
+            object? value, ref float y, string id, Action<object?> setter, Type fieldType)
         {
             DrawLabel(r, cr, label, y);
             float fw = cr.Width - LW - PAD;
@@ -585,16 +603,18 @@ namespace ElintriaEngine.UI.Panels
             r.FillRect(fr, bg);
             r.DrawRect(fr, isHovering ? Color.FromArgb(255, 80, 160, 255) : ColBorder);
 
-            string display = value == null ? "None (drag to assign)" :
-                             value is Core.GameObject go ? go.Name :
-                             value is Core.Component cp ? (cp.GameObject?.Name ?? cp.GetType().Name) :
-                             value.ToString() ?? "?";
+            // Show type hint so user knows what to drag
+            string typeName = fieldType == typeof(Core.GameObject) ? "GameObject" : fieldType.Name;
+            string display = value == null
+                ? $"None ({typeName})"
+                : value is Core.GameObject go ? go.Name
+                : value is Core.Component cp ? $"{cp.GameObject?.Name ?? "?"} ({cp.GetType().Name})"
+                : value.ToString() ?? "?";
             r.DrawText(display, new PointF(fr.X + 4f, fr.Y + 3f),
                 value == null ? Color.FromArgb(160, 140, 140, 150) : Color.FromArgb(255, 200, 220, 255), 9f);
 
-            // Register for drops: store field type so EditorLayout can route correctly
-            _fields.Add(new FieldRecord(fr, id, value,
-                typeof(Core.GameObject), nv => setter(nv)));
+            // Store the actual expected type for correct routing in FlushGODrops
+            _fields.Add(new FieldRecord(fr, id, value, fieldType, nv => setter(nv)));
             y += FH; ContentHeight += FH;
         }
 

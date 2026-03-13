@@ -44,7 +44,27 @@ namespace ElintriaEngine.UI.Panels
         private static readonly Color CShadow = Color.FromArgb(80, 0, 0, 0);
 
         public ContextMenu(PointF position, List<ContextMenuItem> items)
-        { _pos = position; _items = items; }
+        {
+            _items = items;
+            // Clamp position so the menu never clips off screen edges.
+            // We use safe defaults; call Reposition() after construction if you have screen size.
+            _pos = position;
+        }
+
+        /// <summary>
+        /// Call after construction to clamp the menu inside the window.
+        /// </summary>
+        public void Reposition(float screenW, float screenH)
+        {
+            float x = _pos.X;
+            float y = _pos.Y;
+            float h = TotalHeight();
+            if (x + MenuW > screenW) x = screenW - MenuW - 4f;
+            if (y + h > screenH) y = screenH - h - 4f;
+            if (x < 0) x = 0;
+            if (y < 0) y = 0;
+            _pos = new PointF(x, y);
+        }
 
         public float TotalHeight()
         {

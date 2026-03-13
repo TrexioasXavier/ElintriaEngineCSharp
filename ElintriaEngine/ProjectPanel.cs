@@ -36,10 +36,12 @@ namespace ElintriaEngine.UI.Panels
         private FileItem? _hovered;
         private FileItem? _renaming;
         private string _renameBuffer = "";
-        private bool _tileView = false;   // list view by default – easier to see
         private ContextMenu? _ctxMenu;
         private bool _showCtx;
         private List<string> _breadcrumbs = new();
+
+        public string CurrentPath => _curPath;
+        public (int W, int H) ScreenSize { get; set; } = (1920, 1080);
 
         public FileItem? ActiveDrag { get; private set; }
         private FileItem? _dragItem;
@@ -52,12 +54,31 @@ namespace ElintriaEngine.UI.Panels
         public event Action<FileItem>? AssetDoubleClicked;
         public event Action<FileItem>? DragStarted;
 
-        // Layout
-        private const float BreadH = 22f;   // breadcrumb bar height
-        private const float ListRowH = 22f;
-        private const float TileW = 68f;
-        private const float TileH = 76f;
-        private const float TileGap = 6f;
+        // ── Layout constants ──────────────────────────────────────────────────
+        private const float BreadH = 22f;
+        private const float SliderH = 24f;   // bottom toolbar with size slider
+        private const float MinScale = 0.5f;
+        private const float MaxScale = 3.0f;
+        private float _scale = 1.0f;          // user-controlled size scale
+
+        // Scaled dimensions computed each frame
+        private float ListRowH => MathF.Max(16f, 22f * _scale);
+        private float TileW => MathF.Max(48f, 68f * _scale);
+        private float TileH => TileW + 20f;
+        private float TileGap => MathF.Max(4f, 6f * _scale);
+        private float IconFont => Math.Clamp(8f + (_scale - 1f) * 8f, 7f, 16f);
+        private float TextFont => Math.Clamp(8f + (_scale - 1f) * 4f, 7f, 13f);
+
+        // Slider drag state
+        private bool _sliderDrag;
+        private float _sliderTrackX;
+        private float _sliderTrackW;
+
+        // Tile vs list
+        private bool _tileView = true;
+
+        // ── Prefab drop highlight ─────────────────────────────────────────────
+        public bool PrefabDropHighlight { get; set; }
 
         public ProjectPanel(RectangleF bounds) : base("Project", bounds)
         { MinWidth = 180f; MinHeight = 100f; }
@@ -66,12 +87,11 @@ namespace ElintriaEngine.UI.Panels
         {
             _rootPath = path;
             _curPath = path;
-            // Create the Assets folder if it doesn't exist so we can navigate into it
             if (!Directory.Exists(path)) Directory.CreateDirectory(path);
             Refresh();
         }
 
-        private void Refresh()
+        public void Refresh()
         {
             _items.Clear();
             _breadcrumbs.Clear();
@@ -84,7 +104,6 @@ namespace ElintriaEngine.UI.Panels
                 foreach (var part in rel.Split(Path.DirectorySeparatorChar))
                     _breadcrumbs.Add(part);
 
-            // Folders first, then files — sorted alphabetically
             var dir = new DirectoryInfo(_curPath);
             foreach (var d in dir.GetDirectories().Where(d => !d.Name.StartsWith('.')).OrderBy(d => d.Name))
                 _items.Add(new FileItem(d.Name, d.FullName, AssetType.Folder, true));
@@ -109,7 +128,9 @@ namespace ElintriaEngine.UI.Panels
             _ => AssetType.Unknown,
         };
 
-        // ── Render ─────────────────────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════════
+        //  Render
+        // ══════════════════════════════════════════════════════════════════════
         public override void OnRender(IEditorRenderer r)
         {
             if (!IsVisible) return;
@@ -122,45 +143,89 @@ namespace ElintriaEngine.UI.Panels
                        new PointF(Bounds.Right, breadRect.Bottom),
                        Color.FromArgb(255, 50, 50, 50));
 
-            // Breadcrumbs clickable
             float bx = Bounds.X + 6f;
             for (int i = 0; i < _breadcrumbs.Count; i++)
             {
                 bool last = i == _breadcrumbs.Count - 1;
-                var bc = last ? ColText : Color.FromArgb(255, 100, 158, 255);
-                r.DrawText(_breadcrumbs[i], new PointF(bx, breadRect.Y + 5f), bc, 10f);
+                r.DrawText(_breadcrumbs[i], new PointF(bx, breadRect.Y + 5f),
+                    last ? ColText : Color.FromArgb(255, 100, 158, 255), 10f);
                 bx += _breadcrumbs[i].Length * 6.0f + 4f;
                 if (!last) { r.DrawText(">", new PointF(bx, breadRect.Y + 5f), ColTextDim, 10f); bx += 12f; }
             }
 
-            // View toggle button
+            // View-mode toggle (top-right of breadcrumb)
             var tBtn = new RectangleF(Bounds.Right - 22f, breadRect.Y + 3f, 18f, 16f);
             r.FillRect(tBtn, Color.FromArgb(255, 52, 52, 52));
             r.DrawRect(tBtn, ColBorder);
             r.DrawText(_tileView ? "L" : "T", new PointF(tBtn.X + 4f, tBtn.Y + 2f), ColText, 9f);
 
-            // ── Content area (below breadcrumb bar) ────────────────────────────
-            var cr = new RectangleF(
-                Bounds.X,
-                Bounds.Y + HeaderH + BreadH,
-                Bounds.Width - 8f,         // leave room for scrollbar
-                Bounds.Height - HeaderH - BreadH);
+            // ── Bottom slider toolbar ──────────────────────────────────────────
+            var sliderBar = new RectangleF(Bounds.X, Bounds.Bottom - SliderH, Bounds.Width, SliderH);
+            r.FillRect(sliderBar, Color.FromArgb(255, 24, 24, 26));
+            r.DrawLine(new PointF(sliderBar.X, sliderBar.Y),
+                       new PointF(sliderBar.Right, sliderBar.Y),
+                       Color.FromArgb(255, 50, 50, 55));
+
+            // Scale label
+            string scaleLabel = $"{(int)(_scale * 100)}%";
+            r.DrawText("⊟", new PointF(sliderBar.X + 5f, sliderBar.Y + 5f), ColTextDim, 10f);
+            r.DrawText("⊞", new PointF(sliderBar.Right - 18f, sliderBar.Y + 5f), ColTextDim, 10f);
+            r.DrawText(scaleLabel,
+                new PointF(sliderBar.Right - 50f, sliderBar.Y + 6f),
+                ColTextDim, 8f);
+
+            // Track
+            float padL = sliderBar.X + 18f;
+            float padR = sliderBar.Right - 55f;
+            _sliderTrackX = padL;
+            _sliderTrackW = padR - padL;
+            var track = new RectangleF(padL, sliderBar.Y + 10f, _sliderTrackW, 4f);
+            r.FillRect(track, Color.FromArgb(255, 55, 55, 60));
+            r.DrawRect(track, Color.FromArgb(255, 70, 70, 78));
+
+            // Filled portion
+            float frac = (_scale - MinScale) / (MaxScale - MinScale);
+            float filled = _sliderTrackW * frac;
+            if (filled > 0)
+                r.FillRect(new RectangleF(padL, sliderBar.Y + 10f, filled, 4f),
+                    Color.FromArgb(255, 70, 130, 255));
+
+            // Thumb
+            float thumbX = padL + filled - 5f;
+            var thumb = new RectangleF(thumbX, sliderBar.Y + 6f, 10f, 12f);
+            r.FillRect(thumb, _sliderDrag
+                ? Color.FromArgb(255, 100, 170, 255)
+                : Color.FromArgb(255, 180, 195, 225));
+            r.DrawRect(thumb, Color.FromArgb(255, 60, 100, 200));
+
+            // ── Content area ───────────────────────────────────────────────────
+            var cr = ContentArea;
 
             r.PushClip(cr);
-            r.FillRect(cr, ColBg);
 
-            if (_items.Count == 0)
+            // Prefab drop highlight
+            if (PrefabDropHighlight)
             {
-                r.DrawText("(empty folder)", new PointF(cr.X + 10f, cr.Y + 10f), ColTextDim, 11f);
+                r.FillRect(cr, Color.FromArgb(40, 80, 200, 80));
+                r.DrawRect(cr, Color.FromArgb(200, 80, 220, 100), 2f);
+                r.DrawText("Drop to create Prefab",
+                    new PointF(cr.X + cr.Width / 2f - 60f, cr.Y + cr.Height / 2f - 8f),
+                    Color.FromArgb(220, 120, 255, 130), 11f);
             }
-            else if (_tileView)
-                RenderTiles(r, cr);
             else
-                RenderList(r, cr);
+            {
+                r.FillRect(cr, ColBg);
+                if (_items.Count == 0)
+                    r.DrawText("(empty folder)", new PointF(cr.X + 10f, cr.Y + 10f), ColTextDim, 11f);
+                else if (_tileView)
+                    RenderTiles(r, cr);
+                else
+                    RenderList(r, cr);
+            }
 
             r.PopClip();
 
-            // ── Scrollbar drawn outside clip ───────────────────────────────────
+            // Scrollbar (outside clip)
             DrawScrollBarManual(r, cr);
 
             if (_showCtx && _ctxMenu != null)
@@ -181,96 +246,132 @@ namespace ElintriaEngine.UI.Panels
                 Color.FromArgb(255, 80, 80, 80));
         }
 
-        // ── List view (default) ────────────────────────────────────────────────
+        // ── List view ─────────────────────────────────────────────────────────
         private void RenderList(IEditorRenderer r, RectangleF cr)
         {
-            ContentHeight = _items.Count * ListRowH;
+            float rowH = ListRowH;
+            ContentHeight = _items.Count * rowH;
             float y = cr.Y - ScrollOffset;
 
             for (int i = 0; i < _items.Count; i++)
             {
                 var item = _items[i];
-                var row = new RectangleF(cr.X, y, cr.Width, ListRowH);
+                var row = new RectangleF(cr.X, y, cr.Width, rowH);
                 item.CachedBounds = row;
 
-                if (y + ListRowH >= cr.Y && y <= cr.Bottom)
+                if (y + rowH >= cr.Y && y <= cr.Bottom)
                 {
-                    // Alternating row shading
                     if ((i & 1) == 1) r.FillRect(row, Color.FromArgb(12, 255, 255, 255));
-
                     if (_selected == item) r.FillRect(row, ColSelected);
                     else if (_hovered == item) r.FillRect(row, ColHover);
 
-                    // Icon (ASCII)
-                    string icon = TypeIcon(item);
-                    r.DrawText(icon, new PointF(cr.X + 4f, y + 4f), IconColor(item.Type), 10f);
-                    // Name
+                    // Icon badge
+                    string icon = TypeLabel(item);
+                    Color iCol = IconColor(item.Type);
+                    float badgeW = icon.Length * 5.5f + 4f;
+                    var badge = new RectangleF(cr.X + 3f, y + (rowH - 14f) / 2f, badgeW, 14f);
+                    r.FillRect(badge, Color.FromArgb(180, TileBg(item.Type)));
+                    r.DrawText(icon, new PointF(badge.X + 2f, badge.Y + 2f), Color.White, MathF.Max(7f, TextFont - 1f));
+
+                    // File name
                     string nm = item == _renaming ? _renameBuffer + "|" : item.Name;
-                    r.DrawText(nm, new PointF(cr.X + 22f, y + 5f), item.IsDirectory ? Color.FromArgb(255, 180, 200, 255) : ColText, 10f);
-                    // Extension badge
+                    r.DrawText(nm, new PointF(cr.X + badgeW + 8f, y + (rowH - 10f) / 2f),
+                        item.IsDirectory ? Color.FromArgb(255, 180, 200, 255) : ColText, TextFont);
+
+                    // Extension (right-aligned)
                     if (!item.IsDirectory)
                     {
                         string ext = Path.GetExtension(item.Name).ToUpper();
-                        r.DrawText(ext, new PointF(cr.Right - ext.Length * 5.5f - 6f, y + 5f), ColTextDim, 9f);
+                        r.DrawText(ext, new PointF(cr.Right - ext.Length * 5f - 6f, y + (rowH - 10f) / 2f),
+                            ColTextDim, MathF.Max(7f, TextFont - 2f));
                     }
                 }
-                y += ListRowH;
+                y += rowH;
             }
         }
 
-        // ── Tile view ──────────────────────────────────────────────────────────
+        // ── Tile view ─────────────────────────────────────────────────────────
         private void RenderTiles(IEditorRenderer r, RectangleF cr)
         {
-            int cols = Math.Max(1, (int)((cr.Width + TileGap) / (TileW + TileGap)));
-            float startX = cr.X + TileGap;
-            float rowH = TileH + TileGap + 14f;
+            float tw = TileW, th = TileH, gap = TileGap;
+            int cols = Math.Max(1, (int)((cr.Width - gap) / (tw + gap)));
+            float rowH = th + gap;
 
-            ContentHeight = (int)Math.Ceiling(_items.Count / (float)cols) * rowH + TileGap;
+            ContentHeight = (float)Math.Ceiling(_items.Count / (float)cols) * rowH + gap;
 
             for (int i = 0; i < _items.Count; i++)
             {
                 int col = i % cols;
                 int row = i / cols;
-                float tx = startX + col * (TileW + TileGap);
-                float ty = cr.Y + TileGap + row * rowH - ScrollOffset;
+                float tx = cr.X + gap + col * (tw + gap);
+                float ty = cr.Y + gap + row * rowH - ScrollOffset;
 
                 var item = _items[i];
-                item.CachedBounds = new RectangleF(tx - 2, ty - 2, TileW + 4, TileH + 16f);
+                var outer = new RectangleF(tx - 2f, ty - 2f, tw + 4f, th + 4f);
+                item.CachedBounds = outer;
 
-                if (ty + TileH + 14f < cr.Y || ty > cr.Bottom) continue;
+                if (ty + th < cr.Y || ty > cr.Bottom) continue;
 
                 bool sel = _selected == item, hov = _hovered == item;
-                if (sel) r.FillRect(item.CachedBounds, ColSelected);
-                else if (hov) r.FillRect(item.CachedBounds, ColHover);
+                if (sel) r.FillRect(outer, ColSelected);
+                else if (hov) r.FillRect(outer, ColHover);
 
-                // Tile body
-                r.FillRect(new RectangleF(tx + 4, ty + 4, TileW - 8, TileH - 18f), TileBg(item.Type));
-                r.DrawRect(new RectangleF(tx + 4, ty + 4, TileW - 8, TileH - 18f), Color.FromArgb(60, 255, 255, 255));
+                // Tile body — leave room at bottom for filename
+                float labelH = MathF.Max(14f, TextFont + 6f);
+                var body = new RectangleF(tx, ty, tw, th - labelH);
+                r.FillRect(body, TileBg(item.Type));
+                r.DrawRect(body, Color.FromArgb(50, 255, 255, 255));
 
-                // Icon text centred
+                // Icon centred in body
                 string icon = TypeIcon(item);
-                float iconX = tx + TileW / 2f - 6f;
-                r.DrawText(icon, new PointF(iconX, ty + TileH / 2f - 18f), Color.White, 14f);
+                float iconSz = IconFont;
+                float iconX = tx + (tw - iconSz * 0.65f) / 2f;
+                float iconY = ty + (body.Height - iconSz) / 2f;
+                r.DrawText(icon, new PointF(iconX, iconY), Color.White, iconSz);
 
-                // File name
-                string nm = item == _renaming ? _renameBuffer + "|" : TruncName(item.Name, 9);
-                r.DrawText(nm, new PointF(tx + 3f, ty + TileH - 8f), ColText, 8f);
+                // Type badge (top-left corner)
+                string badge = TypeLabel(item);
+                var badgeR = new RectangleF(tx + 2f, ty + 2f, badge.Length * 5f + 4f, 12f);
+                r.FillRect(badgeR, Color.FromArgb(150, 20, 20, 20));
+                r.DrawText(badge, new PointF(badgeR.X + 2f, badgeR.Y + 1f), IconColor(item.Type), 7f);
+
+                // Filename below tile
+                string nm = item == _renaming ? _renameBuffer + "|" : TruncName(item.Name, _scale);
+                r.DrawText(nm, new PointF(tx + 2f, ty + th - labelH + 2f), ColText, TextFont);
             }
         }
 
+        // ── Helpers ───────────────────────────────────────────────────────────
+        // Large unicode icon for tile centre
         private static string TypeIcon(FileItem i) => i.Type switch
         {
-            AssetType.Folder => "[DIR]",
-            AssetType.Script => "[C#]",
-            AssetType.Texture => "[IMG]",
-            AssetType.Model => "[3D]",
-            AssetType.Material => "[MAT]",
-            AssetType.Shader => "[SHD]",
-            AssetType.Scene => "[SCN]",
-            AssetType.Prefab => "[PFB]",
-            AssetType.Audio => "[SND]",
-            AssetType.Text => "[TXT]",
-            _ => "[???]",
+            AssetType.Folder => "📁",
+            AssetType.Script => "📄",
+            AssetType.Texture => "🖼",
+            AssetType.Model => "📦",
+            AssetType.Material => "🎨",
+            AssetType.Shader => "✦",
+            AssetType.Scene => "🌐",
+            AssetType.Prefab => "⬡",
+            AssetType.Audio => "♪",
+            AssetType.Text => "📝",
+            _ => "?",
+        };
+
+        // Short ASCII badge
+        private static string TypeLabel(FileItem i) => i.Type switch
+        {
+            AssetType.Folder => "DIR",
+            AssetType.Script => "C#",
+            AssetType.Texture => "IMG",
+            AssetType.Model => "3D",
+            AssetType.Material => "MAT",
+            AssetType.Shader => "SHD",
+            AssetType.Scene => "SCN",
+            AssetType.Prefab => "PFB",
+            AssetType.Audio => "SND",
+            AssetType.Text => "TXT",
+            _ => "???",
         };
 
         private static Color IconColor(AssetType t) => t switch
@@ -282,6 +383,7 @@ namespace ElintriaEngine.UI.Panels
             AssetType.Material => Color.FromArgb(255, 220, 190, 60),
             AssetType.Shader => Color.FromArgb(255, 80, 200, 220),
             AssetType.Scene => Color.FromArgb(255, 80, 190, 80),
+            AssetType.Prefab => Color.FromArgb(255, 120, 200, 255),
             AssetType.Audio => Color.FromArgb(255, 210, 100, 160),
             _ => Color.FromArgb(255, 160, 160, 160),
         };
@@ -295,19 +397,29 @@ namespace ElintriaEngine.UI.Panels
             AssetType.Material => Color.FromArgb(255, 130, 100, 35),
             AssetType.Shader => Color.FromArgb(255, 35, 115, 130),
             AssetType.Scene => Color.FromArgb(255, 35, 85, 35),
+            AssetType.Prefab => Color.FromArgb(255, 30, 90, 140),
             AssetType.Audio => Color.FromArgb(255, 120, 45, 110),
             _ => Color.FromArgb(255, 58, 58, 58),
         };
 
-        private static string TruncName(string s, int max) =>
-            s.Length > max ? s[..(max - 1)] + "~" : s;
+        private string TruncName(string s, float scale)
+        {
+            int max = Math.Max(6, (int)(TileW / (TextFont * 0.62f)));
+            return s.Length > max ? s[..(max - 1)] + "~" : s;
+        }
 
-        // ── Content rect used for mouse hit tests ─────────────────────────────
         private RectangleF ContentArea => new(
-            Bounds.X, Bounds.Y + HeaderH + BreadH,
-            Bounds.Width - 8f, Bounds.Height - HeaderH - BreadH);
+            Bounds.X,
+            Bounds.Y + HeaderH + BreadH,
+            Bounds.Width - 8f,
+            Bounds.Height - HeaderH - BreadH - SliderH);
 
-        // ── Input ──────────────────────────────────────────────────────────────
+        private RectangleF SliderBarRect => new(
+            Bounds.X, Bounds.Bottom - SliderH, Bounds.Width, SliderH);
+
+        // ══════════════════════════════════════════════════════════════════════
+        //  Input
+        // ══════════════════════════════════════════════════════════════════════
         public override void OnMouseDown(MouseButtonEventArgs e, PointF pos)
         {
             if (!IsVisible) return;
@@ -323,11 +435,22 @@ namespace ElintriaEngine.UI.Panels
 
             if (_renaming != null) { CommitRename(); return; }
 
-            // View toggle button
-            var tBtn = new RectangleF(Bounds.Right - 22f, Bounds.Y + HeaderH + 3f, 18f, 16f);
-            if (tBtn.Contains(pos)) { _tileView = !_tileView; return; }
+            // ── Slider bar ────────────────────────────────────────────────────
+            if (SliderBarRect.Contains(pos) && e.Button == MouseButton.Left)
+            {
+                if (pos.X >= _sliderTrackX && pos.X <= _sliderTrackX + _sliderTrackW)
+                {
+                    _sliderDrag = true;
+                    ApplySliderDrag(pos.X);
+                }
+                return;
+            }
 
-            // Breadcrumb click
+            // ── View toggle ───────────────────────────────────────────────────
+            var tBtn = new RectangleF(Bounds.Right - 22f, Bounds.Y + HeaderH + 3f, 18f, 16f);
+            if (tBtn.Contains(pos)) { _tileView = !_tileView; ScrollOffset = 0f; return; }
+
+            // ── Breadcrumb ────────────────────────────────────────────────────
             if (HandleBreadcrumb(pos)) return;
 
             var ca = ContentArea;
@@ -359,6 +482,7 @@ namespace ElintriaEngine.UI.Panels
 
         public override void OnMouseUp(MouseButtonEventArgs e, PointF pos)
         {
+            _sliderDrag = false;
             ActiveDrag = null; _dragItem = null;
             base.OnMouseUp(e, pos);
         }
@@ -367,6 +491,13 @@ namespace ElintriaEngine.UI.Panels
         {
             base.OnMouseMove(pos);
             _ctxMenu?.OnMouseMove(pos);
+
+            if (_sliderDrag)
+            {
+                ApplySliderDrag(pos.X);
+                return;
+            }
+
             _hovered = ContentArea.Contains(pos) ? HitTest(pos) : null;
 
             if (_dragItem != null && ActiveDrag == null)
@@ -379,6 +510,7 @@ namespace ElintriaEngine.UI.Panels
 
         public override void OnMouseScroll(float delta)
         {
+            if (SliderBarRect.Contains(new PointF(_dragStart.X, Bounds.Bottom - 1f))) return;
             float max = Math.Max(0, ContentHeight - ContentArea.Height);
             ScrollOffset = Math.Clamp(ScrollOffset - delta * 28f, 0f, max);
         }
@@ -404,6 +536,13 @@ namespace ElintriaEngine.UI.Panels
         public override void OnTextInput(TextInputEventArgs e)
         { if (_renaming != null) _renameBuffer += e.AsString; }
 
+        private void ApplySliderDrag(float mouseX)
+        {
+            float frac = Math.Clamp((mouseX - _sliderTrackX) / _sliderTrackW, 0f, 1f);
+            _scale = MinScale + frac * (MaxScale - MinScale);
+        }
+
+        // ── Hit test ──────────────────────────────────────────────────────────
         private FileItem? HitTest(PointF pos)
         {
             foreach (var i in _items)
@@ -411,6 +550,7 @@ namespace ElintriaEngine.UI.Panels
             return null;
         }
 
+        // ── Breadcrumb ────────────────────────────────────────────────────────
         private bool HandleBreadcrumb(PointF pos)
         {
             float bx = Bounds.X + 6f;
@@ -429,13 +569,14 @@ namespace ElintriaEngine.UI.Panels
         {
             string p = _rootPath;
             for (int i = 1; i <= index; i++) p = Path.Combine(p, _breadcrumbs[i]);
-            _curPath = p; Refresh();
+            _curPath = p; ScrollOffset = 0f; Refresh();
         }
 
+        // ── Double click ──────────────────────────────────────────────────────
         private void HandleDoubleClick(FileItem item)
         {
             AssetDoubleClicked?.Invoke(item);
-            if (item.IsDirectory) { _curPath = item.FullPath; Refresh(); return; }
+            if (item.IsDirectory) { _curPath = item.FullPath; ScrollOffset = 0f; Refresh(); return; }
             if (item.Type == AssetType.Script) OpenScript(item.FullPath);
         }
 
@@ -453,6 +594,7 @@ namespace ElintriaEngine.UI.Panels
             Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
         }
 
+        // ── Rename ────────────────────────────────────────────────────────────
         private void StartRename(FileItem item)
         { _renaming = item; _renameBuffer = Path.GetFileNameWithoutExtension(item.Name); }
 
@@ -461,15 +603,26 @@ namespace ElintriaEngine.UI.Panels
             if (_renaming == null || _renameBuffer.Trim().Length == 0) { _renaming = null; return; }
             string ext = Path.GetExtension(_renaming.Name);
             string dest = Path.Combine(Path.GetDirectoryName(_renaming.FullPath)!, _renameBuffer.Trim() + ext);
-            try { if (_renaming.IsDirectory) Directory.Move(_renaming.FullPath, dest); else File.Move(_renaming.FullPath, dest); Refresh(); }
+            try
+            {
+                if (_renaming.IsDirectory) Directory.Move(_renaming.FullPath, dest);
+                else File.Move(_renaming.FullPath, dest);
+                Refresh();
+            }
             catch { }
             _renaming = null;
         }
 
+        // ── Delete ────────────────────────────────────────────────────────────
         private void DeleteSelected()
         {
             if (_selected == null) return;
-            try { if (_selected.IsDirectory) Directory.Delete(_selected.FullPath, true); else File.Delete(_selected.FullPath); _selected = null; Refresh(); }
+            try
+            {
+                if (_selected.IsDirectory) Directory.Delete(_selected.FullPath, true);
+                else File.Delete(_selected.FullPath);
+                _selected = null; Refresh();
+            }
             catch { }
         }
 
@@ -501,6 +654,7 @@ namespace ElintriaEngine.UI.Panels
                 items.Add(new("Refresh", Refresh));
             }
             _ctxMenu = new ContextMenu(pos, items);
+            _ctxMenu.Reposition(ScreenSize.W, ScreenSize.H);
             _showCtx = true;
         }
 

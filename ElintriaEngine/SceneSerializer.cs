@@ -94,6 +94,36 @@ namespace ElintriaEngine.Core
             return scene;
         }
 
+        // ── Public prefab helpers ──────────────────────────────────────────────
+        public static string GameObjectToJson(GameObject go)
+        {
+            var sgo = SerializeGO(go);
+            return JsonSerializer.Serialize(sgo, _opts);
+        }
+
+        public static GameObject? GameObjectFromJson(string json)
+        {
+            try
+            {
+                var sgo = JsonSerializer.Deserialize<SerializedGameObject>(json, _opts);
+                return sgo == null ? null : DeserializeGO(sgo);
+            }
+            catch { return null; }
+        }
+
+        public static void SavePrefab(GameObject go, string filePath)
+        {
+            string dir = Path.GetDirectoryName(filePath)!;
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllText(filePath, GameObjectToJson(go));
+        }
+
+        public static GameObject? LoadPrefab(string filePath)
+        {
+            if (!File.Exists(filePath)) return null;
+            return GameObjectFromJson(File.ReadAllText(filePath));
+        }
+
         // ── Serialise one GameObject (recursive) ──────────────────────────────
         private static SerializedGameObject SerializeGO(GameObject go)
         {

@@ -8,16 +8,23 @@ namespace GameScripts
         // ── Public fields (visible in Inspector) ──────────────────────────────
         public float speed  = 5.0f;
         public bool  active = true;
+        public ParticleSystem particleSystem;
 
         // Called once before the first frame — like Unity's Start()
         public override void OnStart()
         {
             Console.WriteLine($"NewScript started on {GameObject?.Name}");
+            
         }
 
         // Called every frame — like Unity's Update()
         public override void OnUpdate(double deltaTime)
         {
+            if (particleSystem != null)
+            {
+                particleSystem.Play();
+                Console.WriteLine("Playing particle system!"    );
+            }
         }
 
         // Called after all Updates — like Unity's LateUpdate()

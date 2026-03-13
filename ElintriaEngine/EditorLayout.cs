@@ -148,6 +148,10 @@ namespace ElintriaEngine.UI
             if (System.IO.Directory.Exists(rootForProject))
                 Project.SetRootPath(rootForProject);
 
+            // Give panels window size for context menu clamping
+            Hierarchy.ScreenSize = (winW, winH);
+            Project.ScreenSize = (winW, winH);
+
             // Auto-compile whenever .cs files change in Assets/
             if (!string.IsNullOrEmpty(projectRoot))
             {
@@ -534,6 +538,28 @@ namespace ElintriaEngine.UI
                 return;
             }
 
+            // ── Prefab drop onto SceneView or Hierarchy → instantiate ─────────
+            if (Project.ActiveDrag != null
+                && Project.ActiveDrag.Type == AssetType.Prefab
+                && _scene != null)
+            {
+                bool onScene = SceneView.IsVisible && SceneView.ContainsPoint(pos);
+                bool onHier = Hierarchy.IsVisible && Hierarchy.ContainsPoint(pos);
+                if (onScene || onHier)
+                {
+                    var go = Core.SceneSerializer.LoadPrefab(Project.ActiveDrag.FullPath);
+                    if (go != null)
+                    {
+                        _scene.AddGameObject(go);
+                        Hierarchy.SetScene(_scene);
+                        Inspector.Inspect(go);
+                        SceneView.SetSelected(go);
+                        Hierarchy.ForceSelect(go);
+                        Console.WriteLine($"[Editor] Prefab instantiated: {go.Name}");
+                    }
+                }
+            }
+
             // ── GO drop onto inspector object-ref field ────────────────────────
             if (_goDragActive != null && Inspector.IsVisible && Inspector.ContainsPoint(pos))
             {
@@ -541,8 +567,37 @@ namespace ElintriaEngine.UI
                 if (fid != null)
                     Inspector.AcceptGODrop(fid, _goDragActive);
             }
+
+            // ── GO drop onto Project panel → create prefab ────────────────────
+            if (_goDragActive != null && Project.IsVisible && Project.ContainsPoint(pos))
+            {
+                string prefabName = _goDragActive.Name;
+                string prefabPath = System.IO.Path.Combine(
+                    Project.CurrentPath,
+                    prefabName + ".prefab");
+                // Unique name if file already exists
+                int n = 1;
+                while (System.IO.File.Exists(prefabPath))
+                    prefabPath = System.IO.Path.Combine(
+                        Project.CurrentPath, $"{prefabName} ({n++}).prefab");
+
+                try
+                {
+                    Core.SceneSerializer.SavePrefab(_goDragActive, prefabPath);
+                    Project.Refresh();
+                    Console.WriteLine($"[Editor] Prefab created: {System.IO.Path.GetFileName(prefabPath)}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Editor] Prefab creation failed: {ex.Message}");
+                }
+            }
+
             _goDragActive = null;
             Inspector.HoveredDropFieldId = null;
+            Project.PrefabDropHighlight = false;
+            SceneView.PrefabDropHighlight = false;
+            Hierarchy.PrefabDropHighlight = false;
             Inspector.SetDropHighlight(false);
 
             if (Preferences.IsVisible) Preferences.OnMouseUp(e, pos);
@@ -564,13 +619,23 @@ namespace ElintriaEngine.UI
             // Highlight inspector object-ref field under cursor during hierarchy GO drag
             if (_goDragActive != null && Inspector.IsVisible && Inspector.ContainsPoint(pos))
             {
-                // Find closest GameObject field under mouse
                 Inspector.HoveredDropFieldId = Inspector.GetObjectRefFieldAt(pos);
             }
             else
             {
                 Inspector.HoveredDropFieldId = null;
             }
+
+            // Highlight project panel as prefab drop target during GO drag
+            Project.PrefabDropHighlight = _goDragActive != null
+                && Project.IsVisible
+                && Project.ContainsPoint(pos);
+
+            // Highlight SceneView/Hierarchy as prefab instantiation targets
+            bool draggingPrefab = Project.ActiveDrag?.Type == AssetType.Prefab;
+            SceneView.PrefabDropHighlight = draggingPrefab && SceneView.IsVisible && SceneView.ContainsPoint(pos);
+            Hierarchy.PrefabDropHighlight = draggingPrefab && Hierarchy.IsVisible && Hierarchy.ContainsPoint(pos);
+
             MenuBar.OnMouseMove(pos);
 
             // Update drop highlight while dragging a script
@@ -623,6 +688,10 @@ namespace ElintriaEngine.UI
 
             // Update the dock area and let the tree re-layout all panels
             _dock.SetArea(new RectangleF(0f, MenuH, w, h - MenuH));
+
+            // Keep context menu clamping up to date
+            Hierarchy.ScreenSize = (w, h);
+            Project.ScreenSize = (w, h);
 
             // Floating dialogs stay centered
             BuildSettings.Bounds = new RectangleF(w / 2f - 240f, MenuH + 40f, 480f, 540f);
