@@ -84,6 +84,7 @@ namespace ElintriaEngine.UI.Panels
             "DirectionalLight","SpotLight",
             "Rigidbody","BoxCollider","SphereCollider",
             "AudioSource","AudioListener",
+            "ParticleSystem",
             "CanvasComponent","CanvasRenderer","ImageComponent","ButtonComponent",
             "TextComponent","SliderComponent"
         };
@@ -92,6 +93,9 @@ namespace ElintriaEngine.UI.Panels
         private const float FH = 20f;    // field row height
         private const float SH = 22f;    // section header height
         private const float PAD = 6f;
+
+        // ── Particle System inspector sub-panel ───────────────────────────────
+        private readonly ParticleSystemInspector _psInspector = new();
 
         public InspectorPanel(RectangleF bounds) : base("Inspector", bounds)
         { MinWidth = 210f; MinHeight = 200f; }
@@ -168,6 +172,13 @@ namespace ElintriaEngine.UI.Panels
         }
 
         // ── Object header ──────────────────────────────────────────────────────
+        private bool _showTagDropdown = false;
+        private bool _showLayerDropdown = false;
+        private int _tagDropHov = -1;
+        private int _layerDropHov = -1;
+        private RectangleF _tagBtnRect, _layerBtnRect;
+        private RectangleF _tagDropRect, _layerDropRect;
+
         private void DrawObjectHeader(IEditorRenderer r, RectangleF cr, ref float y)
         {
             if (_target == null) return;
@@ -180,15 +191,77 @@ namespace ElintriaEngine.UI.Panels
             r.DrawRect(cb, ColBorder);
             if (_target.ActiveSelf) r.DrawText("ok", new PointF(cb.X + 1f, cb.Y + 2f), Color.White, 8f);
 
-            // Name
+            // Name field
             string nm = _editId == "__name__" ? _editBuf + "|" : _target.Name;
             r.DrawText(nm, new PointF(cr.X + PAD + 20f, y + 7f), ColText, 12f);
 
-            r.DrawText("Tag: " + _target.Tag, new PointF(cr.Right - 108f, y + 3f), ColTextDim, 9f);
-            r.DrawText("Layer: " + _target.Layer, new PointF(cr.Right - 108f, y + 14f), ColTextDim, 9f);
+            // Tag dropdown button
+            float btnW = 90f, btnH = 11f;
+            _tagBtnRect = new RectangleF(cr.Right - btnW - 4f, y + 2f, btnW, btnH);
+            _layerBtnRect = new RectangleF(cr.Right - btnW - 4f, y + 14f, btnW, btnH);
+            bool tagHov = _tagBtnRect.Contains(_mouse);
+            bool layerHov = _layerBtnRect.Contains(_mouse);
+
+            r.FillRect(_tagBtnRect, tagHov ? ColAccent : Color.FromArgb(255, 50, 50, 58));
+            r.FillRect(_layerBtnRect, layerHov ? ColAccent : Color.FromArgb(255, 50, 50, 58));
+            r.DrawRect(_tagBtnRect, Color.FromArgb(255, 60, 60, 70));
+            r.DrawRect(_layerBtnRect, Color.FromArgb(255, 60, 60, 70));
+
+            r.DrawText("Tag: " + Truncate(_target.Tag, 8),
+                new PointF(_tagBtnRect.X + 3f, _tagBtnRect.Y + 1f), ColTextDim, 8f);
+            r.DrawText("Layer: " + Truncate(_target.Layer, 6),
+                new PointF(_layerBtnRect.X + 3f, _layerBtnRect.Y + 1f), ColTextDim, 8f);
 
             y += 28f; ContentHeight += 28f;
+
+            // Tag dropdown overlay
+            if (_showTagDropdown)
+            {
+                var tl = Core.TagsAndLayers.Instance;
+                float dh = tl.Tags.Count * 18f + 4f;
+                _tagDropRect = new RectangleF(_tagBtnRect.X, _tagBtnRect.Bottom, btnW + 20f, dh);
+                r.FillRect(_tagDropRect, Color.FromArgb(255, 38, 38, 44));
+                r.DrawRect(_tagDropRect, ColAccent);
+                for (int i = 0; i < tl.Tags.Count; i++)
+                {
+                    var ir = new RectangleF(_tagDropRect.X, _tagDropRect.Y + 2f + i * 18f, _tagDropRect.Width, 17f);
+                    bool sel = tl.Tags[i] == _target.Tag;
+                    bool hov = i == _tagDropHov;
+                    if (sel) r.FillRect(ir, ColSelected);
+                    else if (hov) r.FillRect(ir, Color.FromArgb(60, 255, 255, 255));
+                    r.DrawText(tl.Tags[i], new PointF(ir.X + 4f, ir.Y + 3f),
+                        sel ? Color.White : ColText, 9f);
+                }
+                y += dh; ContentHeight += dh;
+            }
+
+            // Layer dropdown overlay
+            if (_showLayerDropdown)
+            {
+                var tl = Core.TagsAndLayers.Instance;
+                float dh = tl.Layers.Count * 18f + 4f;
+                _layerDropRect = new RectangleF(_layerBtnRect.X, _layerBtnRect.Bottom, btnW + 20f, dh);
+                r.FillRect(_layerDropRect, Color.FromArgb(255, 38, 38, 44));
+                r.DrawRect(_layerDropRect, ColAccent);
+                for (int i = 0; i < tl.Layers.Count; i++)
+                {
+                    var ir = new RectangleF(_layerDropRect.X, _layerDropRect.Y + 2f + i * 18f, _layerDropRect.Width, 17f);
+                    bool sel = tl.Layers[i] == _target.Layer;
+                    bool hov = i == _layerDropHov;
+                    if (sel) r.FillRect(ir, ColSelected);
+                    else if (hov) r.FillRect(ir, Color.FromArgb(60, 255, 255, 255));
+                    r.DrawText(tl.Layers[i], new PointF(ir.X + 4f, ir.Y + 3f),
+                        sel ? Color.White : ColText, 9f);
+                }
+                y += dh; ContentHeight += dh;
+            }
         }
+
+        private static string Truncate(string s, int max) =>
+            s.Length <= max ? s : s[..max] + "…";
+
+        // Store mouse position for header hover effects
+        private PointF _mouse;
 
         // ── Transform ─────────────────────────────────────────────────────────
         private void DrawTransform(IEditorRenderer r, RectangleF cr, ref float y)
@@ -262,6 +335,17 @@ namespace ElintriaEngine.UI.Panels
                     y += 40f; ContentHeight += 40f;
                 }
 
+                r.DrawLine(new PointF(cr.X, y), new PointF(cr.Right, y), Color.FromArgb(255, 50, 50, 50));
+                y += 3f; ContentHeight += 3f;
+                return;
+            }
+
+            // ── ParticleSystem — custom inspector ─────────────────────────────
+            if (comp is Core.ParticleSystem ps)
+            {
+                _psInspector.SetMouse(_mouse);
+                DrawSectionHeader(r, cr, "Particle System", () => _target?.RemoveComponent(comp), ref y);
+                _psInspector.Draw(r, cr, ps, ref y, ref ContentHeight);
                 r.DrawLine(new PointF(cr.X, y), new PointF(cr.Right, y), Color.FromArgb(255, 50, 50, 50));
                 y += 3f; ContentHeight += 3f;
                 return;
@@ -823,6 +907,39 @@ namespace ElintriaEngine.UI.Panels
             if (!IsVisible || !Bounds.Contains(pos)) return;
             IsFocused = true;
 
+            // ── Tag dropdown selection ─────────────────────────────────────────
+            if (_showTagDropdown && _target != null)
+            {
+                var tl = Core.TagsAndLayers.Instance;
+                for (int i = 0; i < tl.Tags.Count; i++)
+                {
+                    var ir = new RectangleF(_tagDropRect.X, _tagDropRect.Y + 2f + i * 18f,
+                                            _tagDropRect.Width, 17f);
+                    if (ir.Contains(pos)) { _target.Tag = tl.Tags[i]; _showTagDropdown = false; return; }
+                }
+                _showTagDropdown = false; return;
+            }
+            // ── Layer dropdown selection ───────────────────────────────────────
+            if (_showLayerDropdown && _target != null)
+            {
+                var tl = Core.TagsAndLayers.Instance;
+                for (int i = 0; i < tl.Layers.Count; i++)
+                {
+                    var ir = new RectangleF(_layerDropRect.X, _layerDropRect.Y + 2f + i * 18f,
+                                            _layerDropRect.Width, 17f);
+                    if (ir.Contains(pos)) { _target.Layer = tl.Layers[i]; _showLayerDropdown = false; return; }
+                }
+                _showLayerDropdown = false; return;
+            }
+            // Toggle tag/layer dropdowns via header buttons
+            if (_target != null && e.Button == MouseButton.Left)
+            {
+                if (_tagBtnRect.Contains(pos))
+                { _showTagDropdown = !_showTagDropdown; _showLayerDropdown = false; return; }
+                if (_layerBtnRect.Contains(pos))
+                { _showLayerDropdown = !_showLayerDropdown; _showTagDropdown = false; return; }
+            }
+
             // Add component popup
             if (_showAddComp)
             {
@@ -919,6 +1036,13 @@ namespace ElintriaEngine.UI.Panels
                     _addCompFilter = "";
                     return;
                 }
+
+                // Particle System inspector interactions
+                if (_target != null)
+                {
+                    var ps = _target.GetComponent<Core.ParticleSystem>();
+                    if (ps != null && _psInspector.HandleClick(pos, ps)) return;
+                }
             }
 
             base.OnMouseDown(e, pos);
@@ -927,17 +1051,48 @@ namespace ElintriaEngine.UI.Panels
         public override void OnMouseUp(MouseButtonEventArgs e, PointF pos)
         {
             _dragId = null; _dragSetter = null;
+            _psInspector.EndDrag();
             base.OnMouseUp(e, pos);
         }
 
         public override void OnMouseMove(PointF pos)
         {
+            _mouse = pos;
             base.OnMouseMove(pos);
             // Float field drag
             if (_dragId != null && _dragSetter != null)
             {
                 float delta = (pos.X - _dragStartX) * 0.02f;
                 _dragSetter(_dragStartVal + delta);
+            }
+            // Particle system slider drag
+            if (_psInspector.IsDragging && _target != null)
+            {
+                var ps = _target.GetComponent<Core.ParticleSystem>();
+                if (ps != null) _psInspector.UpdateDrag(pos.X, ps);
+            }
+            // Update tag/layer dropdown hover indices
+            if (_showTagDropdown && _target != null)
+            {
+                var tl = Core.TagsAndLayers.Instance;
+                _tagDropHov = -1;
+                for (int i = 0; i < tl.Tags.Count; i++)
+                {
+                    var ir = new RectangleF(_tagDropRect.X, _tagDropRect.Y + 2f + i * 18f,
+                                            _tagDropRect.Width, 17f);
+                    if (ir.Contains(pos)) { _tagDropHov = i; break; }
+                }
+            }
+            if (_showLayerDropdown && _target != null)
+            {
+                var tl = Core.TagsAndLayers.Instance;
+                _layerDropHov = -1;
+                for (int i = 0; i < tl.Layers.Count; i++)
+                {
+                    var ir = new RectangleF(_layerDropRect.X, _layerDropRect.Y + 2f + i * 18f,
+                                            _layerDropRect.Width, 17f);
+                    if (ir.Contains(pos)) { _layerDropHov = i; break; }
+                }
             }
         }
 

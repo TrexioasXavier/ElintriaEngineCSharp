@@ -18,7 +18,7 @@ namespace ElintriaEngine.Rendering.Scene
         private int _vbo, _ebo;
 
         // ── Vertex layout: pos(3) + normal(3) + uv(2) = 8 floats = 32 bytes ──
-        public readonly int VertexStride = 8 * sizeof(float);
+        public static readonly int VertexStride = 8 * sizeof(float);
 
         private Mesh(string name) => Name = name;
 
@@ -40,7 +40,7 @@ namespace ElintriaEngine.Rendering.Scene
             GL.BufferData(BufferTarget.ElementArrayBuffer, indices.Length * sizeof(uint),
                 indices, BufferUsageHint.StaticDraw);
 
-            int s = m.VertexStride;
+            int s = Mesh.VertexStride;
             GL.EnableVertexAttribArray(0); GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, s, 0);
             GL.EnableVertexAttribArray(1); GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, s, 12);
             GL.EnableVertexAttribArray(2); GL.VertexAttribPointer(2, 2, VertexAttribPointerType.Float, false, s, 24);
@@ -245,7 +245,7 @@ namespace ElintriaEngine.Rendering.Scene
 
         private static int CompileStage(ShaderType type, string src)
         {
-             
+
             Console.WriteLine($"=== {type} SOURCE START ===");
             var lines1 = src.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
             for (int i = 0; i < lines1.Length; i++)
@@ -374,13 +374,13 @@ uniform float uMetallic;
 uniform float uRoughness;
 uniform vec3  uCamPos;
 
-// -- Directional lights --------------------------------------
+// -- Directional lights --
 #define MAX_DIR_LIGHTS 4
 uniform int  uDirCount;
 uniform vec3 uDirDir  [MAX_DIR_LIGHTS];   // world-space direction (points away from light)
 uniform vec3 uDirColor[MAX_DIR_LIGHTS];   // pre-multiplied by intensity
 
-// -- Spot lights --------------------------------------
+// -- Spot lights --
 #define MAX_SPOT_LIGHTS 8
 uniform int  uSpotCount;
 uniform vec3  uSpotPos      [MAX_SPOT_LIGHTS];
@@ -404,7 +404,7 @@ void main(){
 
     vec3 Lo = vec3(0.0);
 
-    // -- Directional lights --------------------------------------
+    // -- Directional lights --
     for (int i = 0; i < uDirCount; i++) {
         vec3  L    = normalize(-uDirDir[i]);
         vec3  H    = normalize(L + V);
@@ -414,24 +414,24 @@ void main(){
             + spec * uDirColor[i] * mix(0.04, 1.0, uMetallic);
     }
 
-    // -- Spot lights --------------------------------------
-    for(int i = 0; i < uSpotCount; i++)
-	{
-		vec3 toFrag = vWorldPos - uSpotPos[i];
-		float dist = length(toFrag);
-		if(dist > uSpotRange[i]) continue;
-		vec3 L = normalize(-toFrag);
-		float cosA = dot(normalize(toFrag), normalize(uSpotDir[i]));
-		float cone = smoothstep(uSpotCosOuter[i], uSpotCosInner[i], cosA);
-		if(cone <= 0.0) continue;
-		float atten = cone * (1.0 - dist / uSpotRange[i]);
-		vec3 H = normalize(L + V);
-		float diff = max(dot(N, L), 0.0);
-		float spec = pow(max(dot(N, H), 0.0), shininess);
-		Lo += (albedo.rgb * diff + spec * mix(0.04, 1.0, uMetallic)) * uSpotColor[i] * atten;
-	}
+    // -- Spot lights --
+    for (int i = 0; i < uSpotCount; i++) {
+        vec3 toFrag = vWorldPos - uSpotPos[i];
+        float dist = length(toFrag);
+        if (dist > uSpotRange[i]) continue;
+        vec3 L = normalize(-toFrag);
+        float cosA = dot(normalize(toFrag), normalize(uSpotDir[i]));
+        float cone = smoothstep(uSpotCosOuter[i], uSpotCosInner[i], cosA);
+        if (cone <= 0.0) continue;
+        float atten = cone * (1.0 - dist / uSpotRange[i]);
+        vec3 H = normalize(L + V);
+        float diff = max(dot(N, L), 0.0);
+        float spec = pow(max(dot(N, H), 0.0), shininess);
+        Lo += (albedo.rgb * diff + spec * mix(0.04, 1.0, uMetallic))
+              * uSpotColor[i] * atten;
+    }
 
-    // -- Ambient --------------------------------------
+    // -- Ambient --
     vec3 col = albedo.rgb * uAmbient + Lo;
     FragColor = vec4(col, albedo.a);
 }";
@@ -442,6 +442,17 @@ void main(){
 layout(location=0) in vec3 aPos;
 uniform mat4 uVP;
 void main(){ gl_Position = uVP * vec4(aPos,1.0); }";
+
+        // Particle billboard vertex shader (uses uModel + uView + uProjection)
+        public const string ParticleVert = @"
+#version 330 core
+layout(location=0) in vec3 aPos;
+uniform mat4 uModel;
+uniform mat4 uView;
+uniform mat4 uProjection;
+void main(){
+    gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
+}";
 
         public const string GridFrag = @"
 #version 330 core

@@ -357,6 +357,9 @@ namespace ElintriaEngine.UI.Panels
                 new("  Canvas",            () => Create("Canvas",           "Canvas,CanvasRenderer",   _ctxTarget)),
                 new("  Button",            () => Create("Button",           "Canvas,CanvasRenderer,Button", _ctxTarget)),
                 new("  Text",              () => Create("Text",             "Canvas,CanvasRenderer,Text", _ctxTarget)),
+                ContextMenuItem.Separator,
+                new("-- Effects --",       null) { IsDisabled = true },
+                new("  Particle System",   () => Create("Particle System",  "ParticleSystem",          _ctxTarget)),
             };
 
             if (target != null)

@@ -28,6 +28,8 @@ namespace ElintriaEngine.UI
         public SceneViewPanel SceneView { get; }
         public BuildSettingsPanel BuildSettings { get; }
         public UI.Panels.UIEditorPanel UIEditor { get; }
+        public PreferencesWindow Preferences { get; }
+        public ProjectSettingsWindow ProjectSettings { get; }
 
         private Core.UIDocument _uiDocument = new();
 
@@ -84,6 +86,21 @@ namespace ElintriaEngine.UI
                 new RectangleF(winW / 2f - 420f, MenuH + 30f, 860f, 540f));
             UIEditor.SetDocument(_uiDocument);
             UIEditor.IsVisible = false;
+
+            // ── Floating editor dialogs ────────────────────────────────────────
+            Preferences = new PreferencesWindow(
+                new RectangleF(winW / 2f - 300f, MenuH + 40f, 600f, 520f));
+            Preferences.IsVisible = false;
+
+            ProjectSettings = new ProjectSettingsWindow(
+                new RectangleF(winW / 2f - 360f, MenuH + 30f, 720f, 580f));
+            ProjectSettings.IsVisible = false;
+
+            // Load per-project tags/layers and project settings
+            Core.TagsAndLayers.LoadForProject(projectRoot);
+            Core.ProjectSettings.LoadForProject(projectRoot);
+            Preferences.SetTagsAndLayers(Core.TagsAndLayers.Instance);
+            ProjectSettings.Load(projectRoot);
 
             WireEvents(projectRoot);
 
@@ -160,10 +177,12 @@ namespace ElintriaEngine.UI
             // Re-resolve scripts so hot-reloaded types work immediately
             Core.SceneRunner.LoadUserScripts(_projectRoot);
             Core.SceneRunner.ResolveEditorScripts(_scene);
-            // Also load companion UI document if it exists
+            // Load companion UI document if it exists
             string uiPath = System.IO.Path.ChangeExtension(path, ".uidoc");
             if (System.IO.File.Exists(uiPath))
                 _uiDocument = Core.UIDocumentSerializer.LoadFromFile(uiPath) ?? new Core.UIDocument();
+            // Remember this as the last-opened scene so it auto-loads next session
+            Core.ProjectManager.SaveLastScene(_projectRoot, path);
         }
 
         // ── Wire events ────────────────────────────────────────────────────────
@@ -192,6 +211,8 @@ namespace ElintriaEngine.UI
             MenuBar.BuildOnly += () => { BuildSettings.IsVisible = true; BuildSettings.StartBuild(false); };
             MenuBar.BuildAndRun += () => { BuildSettings.IsVisible = true; BuildSettings.StartBuild(true); };
             MenuBar.OpenBuildSettings += () => BuildSettings.IsVisible = !BuildSettings.IsVisible;
+            MenuBar.OpenPreferences += () => Preferences.IsVisible = !Preferences.IsVisible;
+            MenuBar.OpenProjectSettings += () => ProjectSettings.IsVisible = !ProjectSettings.IsVisible;
 
             MenuBar.Play += EnterPlayMode;
             MenuBar.Pause += () => { _runner.IsPaused = !_runner.IsPaused; SceneView.IsPaused = _runner.IsPaused; };
@@ -373,7 +394,8 @@ namespace ElintriaEngine.UI
             }
 
             _runner.Tick(dt);
-            SceneView.OnUpdate(dt);      // fly-cam WASD movement
+            SceneView.OnUpdate(dt);              // fly-cam WASD movement
+            Preferences.OnUpdate(dt);            // rebind auto-cancel timer
             Inspector.FlushGODrops();
         }
 
@@ -400,6 +422,8 @@ namespace ElintriaEngine.UI
 
             if (BuildSettings.IsVisible) BuildSettings.OnRender(r);
             if (UIEditor.IsVisible) UIEditor.OnRender(r);
+            if (Preferences.IsVisible) Preferences.OnRender(r);
+            if (ProjectSettings.IsVisible) ProjectSettings.OnRender(r);
 
             // Push live compile state into the menu bar so the indicator updates
             MenuBar.IsCompiling = _scriptsCompiling || (_watcher?.IsCompiling ?? false);
@@ -439,6 +463,10 @@ namespace ElintriaEngine.UI
 
             if (BuildSettings.IsVisible && BuildSettings.ContainsPoint(pos))
             { BuildSettings.OnMouseDown(e, pos); return; }
+            if (Preferences.IsVisible && Preferences.ContainsPoint(pos))
+            { Preferences.OnMouseDown(e, pos); return; }
+            if (ProjectSettings.IsVisible && ProjectSettings.ContainsPoint(pos))
+            { ProjectSettings.OnMouseDown(e, pos); return; }
 
             foreach (var p in PanelZOrder())
             {
@@ -486,6 +514,8 @@ namespace ElintriaEngine.UI
             _goDragActive = null;
             Inspector.HoveredDropFieldId = null;
             Inspector.SetDropHighlight(false);
+            if (Preferences.IsVisible) Preferences.OnMouseUp(e, pos);
+            if (ProjectSettings.IsVisible) ProjectSettings.OnMouseUp(e, pos);
             foreach (var p in PanelZOrder()) p.OnMouseUp(e, pos);
         }
 
@@ -511,10 +541,16 @@ namespace ElintriaEngine.UI
                 Inspector.SetDropHighlight(Inspector.IsVisible && Inspector.ContainsPoint(pos));
 
             foreach (var p in PanelZOrder()) p.OnMouseMove(pos);
+            if (Preferences.IsVisible) Preferences.OnMouseMove(pos);
+            if (ProjectSettings.IsVisible) ProjectSettings.OnMouseMove(pos);
         }
 
         public void OnMouseScroll(float delta)
         {
+            if (Preferences.IsVisible && Preferences.ContainsPoint(_mouse))
+            { Preferences.OnMouseScroll(delta); return; }
+            if (ProjectSettings.IsVisible && ProjectSettings.ContainsPoint(_mouse))
+            { ProjectSettings.OnMouseScroll(delta); return; }
             foreach (var p in PanelZOrder())
                 if (p.IsPointInContent(_mouse)) { p.OnMouseScroll(delta); return; }
         }
@@ -524,14 +560,24 @@ namespace ElintriaEngine.UI
             if (e.Control && e.Key == Keys.S) { SaveScene(); return; }
             if (e.Control && e.Key == Keys.Z) { MenuBar.Undo?.Invoke(); return; }
             if (e.Control && e.Key == Keys.Y) { MenuBar.Redo?.Invoke(); return; }
+            if (Preferences.IsVisible) { Preferences.OnKeyDown(e); return; }
+            if (ProjectSettings.IsVisible) { ProjectSettings.OnKeyDown(e); return; }
             foreach (var p in PanelZOrder()) if (p.IsFocused) { p.OnKeyDown(e); return; }
         }
 
         public void OnKeyUp(KeyboardKeyEventArgs e)
-        { foreach (var p in PanelZOrder()) if (p.IsFocused) { p.OnKeyUp(e); return; } }
+        {
+            if (Preferences.IsVisible) { Preferences.OnKeyUp(e); return; }
+            if (ProjectSettings.IsVisible) { ProjectSettings.OnKeyUp(e); return; }
+            foreach (var p in PanelZOrder()) if (p.IsFocused) { p.OnKeyUp(e); return; }
+        }
 
         public void OnTextInput(TextInputEventArgs e)
-        { foreach (var p in PanelZOrder()) if (p.IsFocused) { p.OnTextInput(e); return; } }
+        {
+            if (Preferences.IsVisible) { Preferences.OnTextInput(e); return; }
+            if (ProjectSettings.IsVisible) { ProjectSettings.OnTextInput(e); return; }
+            foreach (var p in PanelZOrder()) if (p.IsFocused) { p.OnTextInput(e); return; }
+        }
 
         public void OnResize(int w, int h)
         {

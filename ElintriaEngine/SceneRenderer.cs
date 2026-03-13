@@ -17,6 +17,7 @@ namespace ElintriaEngine.Rendering.Scene
         private SceneShader _stdShader = null!;
         private SceneShader _gridShader = null!;
         private SceneShader _flatShader = null!;
+        private SceneShader _particleShader = null!;
 
         // ── Primitive mesh cache ──────────────────────────────────────────────
         private readonly Dictionary<string, Mesh> _meshCache = new();
@@ -55,6 +56,7 @@ namespace ElintriaEngine.Rendering.Scene
             _stdShader = SceneShader.Compile(BuiltinShaderSource.StandardVert, BuiltinShaderSource.StandardFrag);
             _gridShader = SceneShader.Compile(BuiltinShaderSource.GridVert, BuiltinShaderSource.GridFrag);
             _flatShader = SceneShader.Compile(BuiltinShaderSource.GridVert, BuiltinShaderSource.FlatFrag);
+            _particleShader = SceneShader.Compile(BuiltinShaderSource.ParticleVert, BuiltinShaderSource.FlatFrag);
             _defaultMat = new Material(_stdShader);
 
             _meshCache["Cube"] = Mesh.Cube();
@@ -189,6 +191,22 @@ namespace ElintriaEngine.Rendering.Scene
                     DrawGameObject(go, view, proj, camPos, dirLights, spotLights,
                                    ambient, editorFakeLightNeeded);
 
+            // ── Particle Systems ──────────────────────────────────────────────
+            if (scene != null)
+            {
+                GL.Enable(EnableCap.Blend);
+                GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+                GL.DepthMask(false);
+                foreach (var go in scene.All())
+                {
+                    var ps = go.GetComponent<Core.ParticleSystem>();
+                    if (ps == null || !ps.RendererEnabled || !ps.IsPlaying) continue;
+                    DrawParticles(ps, go, view, proj);
+                }
+                GL.DepthMask(true);
+                GL.Disable(EnableCap.Blend);
+            }
+
             // Gizmos: scene-space overlays, always on top (depth-test off inside).
             // IMPORTANT: pass the original UI-space 'viewport' rect (top-left origin),
             // NOT (vx,vy,vw,vh) which is GL-space (bottom-left origin). Mouse coords
@@ -286,6 +304,71 @@ namespace ElintriaEngine.Rendering.Scene
                 : new Vector4(0.8f, 0.82f, 0.85f, 1f));
 
             mesh.Draw();
+        }
+
+        // ── Particle rendering (billboard quads) ──────────────────────────────
+        private void DrawParticles(Core.ParticleSystem ps, GameObject go, Matrix4 view, Matrix4 proj)
+        {
+            if (ps.Particles.Count == 0) return;
+
+            // Get camera right/up vectors from view matrix for billboarding
+            var camRight = new Vector3(view.Row0.X, view.Row0.Y, view.Row0.Z);
+            var camUp = new Vector3(view.Row1.X, view.Row1.Y, view.Row1.Z);
+
+            GL.UseProgram(_particleShader.Program);
+            _particleShader.SetMat4("uView", ref view);
+            _particleShader.SetMat4("uProjection", ref proj);
+
+            // World offset for local-space particles
+            var worldOffset = ps.SimulationSpace == Core.ParticleSimulationSpace.Local
+                ? go.Transform.LocalPosition : Vector3.Zero;
+
+            foreach (var p in ps.Particles)
+            {
+                float s = p.CurrentSize * 0.5f;
+                // Billboard model matrix: right and up from camera, translate to particle pos
+                var pos = p.Position + worldOffset;
+                var model = new Matrix4(
+                    new Vector4(camRight * s, 0f),
+                    new Vector4(camUp * s, 0f),
+                    new Vector4(-Vector3.Cross(camRight, camUp), 0f),
+                    new Vector4(pos.X, pos.Y, pos.Z, 1f));
+
+                _particleShader.SetMat4("uModel", ref model);
+                _particleShader.SetVec4("uColor",
+                    new Vector4(p.ColorR, p.ColorG, p.ColorB, p.ColorA));
+
+                DrawParticleQuad();
+            }
+        }
+
+        private int _particleVao = -1;
+        private int _particleVbo = -1;
+
+        private void DrawParticleQuad()
+        {
+            if (_particleVao < 0) InitParticleQuad();
+            GL.BindVertexArray(_particleVao);
+            GL.DrawArrays(PrimitiveType.TriangleFan, 0, 4);
+            GL.BindVertexArray(0);
+        }
+
+        private void InitParticleQuad()
+        {
+            float[] verts = {
+                -1f, -1f, 0f,
+                 1f, -1f, 0f,
+                 1f,  1f, 0f,
+                -1f,  1f, 0f,
+            };
+            _particleVao = GL.GenVertexArray();
+            _particleVbo = GL.GenBuffer();
+            GL.BindVertexArray(_particleVao);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _particleVbo);
+            GL.BufferData(BufferTarget.ArrayBuffer, verts.Length * sizeof(float), verts, BufferUsageHint.StaticDraw);
+            GL.EnableVertexAttribArray(0);
+            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 12, 0);
+            GL.BindVertexArray(0);
         }
 
         // ── Selection outline (scale-up + flat colour) ────────────────────────
@@ -415,17 +498,93 @@ namespace ElintriaEngine.Rendering.Scene
         public float Near { get; set; } = 0.05f;
         public float Far { get; set; } = 2000f;
 
-        public Vector3 Position
+        // ── Derived geometry ──────────────────────────────────────────────────
+        // Offset from Target to Position in spherical coords
+        private Vector3 SphericalOffset
         {
             get
             {
-                float yRad = MathHelper.DegreesToRadians(Yaw);
-                float pRad = MathHelper.DegreesToRadians(Pitch);
-                return Target + new Vector3(
-                    Distance * MathF.Cos(pRad) * MathF.Sin(yRad),
-                    Distance * MathF.Sin(pRad),
-                    Distance * MathF.Cos(pRad) * MathF.Cos(yRad));
+                float yr = MathHelper.DegreesToRadians(Yaw);
+                float pr = MathHelper.DegreesToRadians(Pitch);
+                return new Vector3(
+                    Distance * MathF.Cos(pr) * MathF.Sin(yr),
+                    Distance * MathF.Sin(pr),
+                    Distance * MathF.Cos(pr) * MathF.Cos(yr));
             }
+        }
+
+        public Vector3 Position => Target + SphericalOffset;
+
+        // Forward = direction camera is looking (from Position toward Target)
+        public Vector3 Forward
+        {
+            get
+            {
+                float yr = MathHelper.DegreesToRadians(Yaw);
+                float pr = MathHelper.DegreesToRadians(Pitch);
+                return -new Vector3(
+                    MathF.Cos(pr) * MathF.Sin(yr),
+                    MathF.Sin(pr),
+                    MathF.Cos(pr) * MathF.Cos(yr));
+            }
+        }
+
+        // Right = perpendicular to forward in the horizontal plane
+        public Vector3 Right
+        {
+            get
+            {
+                float yr = MathHelper.DegreesToRadians(Yaw);
+                return new Vector3(MathF.Cos(yr), 0f, -MathF.Sin(yr));
+            }
+        }
+
+        // ── Orbit (right-click drag) ───────────────────────────────────────────
+        // Classic orbit: position orbits around fixed Target point.
+        public void Orbit(float dYaw, float dPitch)
+        {
+            Yaw += dYaw;
+            Pitch = Math.Clamp(Pitch + dPitch, -89f, 89f);
+        }
+
+        // ── FPS Look (right-click drag, "look from where I stand") ────────────
+        // Camera position is fixed; Target re-computed based on new look direction.
+        // dYaw > 0  = look RIGHT  (mouse dragged right)
+        // dPitch > 0 = look DOWN  (mouse dragged down, natural / non-inverted)
+        public void LookAround(float dYaw, float dPitch)
+        {
+            Vector3 eye = Position;   // save current eye position
+
+            // Yaw: more positive sin(yaw) = camera further in +X = looks more toward -X
+            // To look RIGHT (toward +X), we need Yaw to become more negative.
+            // So: mouse right (dYaw > 0) → Yaw -= dYaw ✓
+            Yaw -= dYaw;
+
+            // Pitch: positive pitch = camera above target = Forward.Y = -sin(pitch) < 0 = looking DOWN.
+            // To look DOWN on mouse-down (dPitch > 0), we need pitch to increase → += ✓
+            Pitch = Math.Clamp(Pitch + dPitch, -89f, 89f);
+
+            // Recompute Target so camera Position stays at eye
+            Target = eye - SphericalOffset;
+        }
+
+        // ── Fly movement ──────────────────────────────────────────────────────
+        // Moves both Target and Position by the same delta (rigid translation).
+        public void Move(Vector3 worldDelta)
+        {
+            Target += worldDelta;
+        }
+
+        // ── Pan (middle-drag) ─────────────────────────────────────────────────
+        // Pan perpendicular to look direction (screen-space).
+        public void Pan(float dx, float dy)
+        {
+            var view = GetViewMatrix();
+            var right = new Vector3(view.Row0.X, view.Row0.Y, view.Row0.Z);
+            var up = new Vector3(view.Row1.X, view.Row1.Y, view.Row1.Z);
+            float spd = Distance * 0.002f;
+            Target -= right * (dx * spd);
+            Target += up * (dy * spd);
         }
 
         public Matrix4 GetViewMatrix() => Matrix4.LookAt(Position, Target, Vector3.UnitY);

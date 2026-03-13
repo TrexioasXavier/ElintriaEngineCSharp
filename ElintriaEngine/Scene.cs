@@ -382,6 +382,7 @@ namespace ElintriaEngine.Core
             { "DynamicScript",      typeof(DynamicScript)      },
             { "DirectionalLight",   typeof(DirectionalLight)   },
             { "SpotLight",          typeof(SpotLight)          },
+            { "ParticleSystem",     typeof(ParticleSystem)     },
         };
 
         /// <summary>

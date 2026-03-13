@@ -9,15 +9,24 @@ using ElintriaEngine.Rendering.Scene;
 namespace ElintriaEngine.UI.Panels
 {
     /// <summary>
-    /// NAVIGATION (Scene tab)
-    ///   Right-drag            = orbit / look
-    ///   Right-held + WASD     = fly forward/back/left/right
-    ///   Right-held + Q/E      = fly down/up
-    ///   Middle-drag           = pan
-    ///   Scroll                = zoom
-    ///   Left-click/drag       = move or rotate selected object via gizmo handles
-    ///   F                     = frame selected object (or reset view)
-    ///   W / E                 = switch Move / Rotate tool (when NOT flying)
+    /// Combined Scene / Game view.
+    ///
+    /// SCENE NAVIGATION (hold Right Mouse Button)
+    /// ────────────────────────────────────────────
+    ///   RMB drag             = look around (FPS-style, camera stays in place)
+    ///   RMB + W/S            = fly forward / backward (camera forward axis)
+    ///   RMB + A/D            = strafe left / right
+    ///   RMB + Q/E            = fly straight down / up (world Y)
+    ///   Middle drag          = pan (shift viewport without changing look direction)
+    ///   Scroll               = zoom (move camera closer / further from target)
+    ///
+    /// TOOLS (when NOT holding RMB)
+    /// ─────────────────────────────
+    ///   W                    = switch to Move tool
+    ///   E                    = switch to Rotate tool
+    ///   F                    = frame selected object (or reset view)
+    ///   Numpad 1/3/7         = front / right / top view
+    ///   Left-click drag      = move / rotate selected object via gizmo handles
     /// </summary>
     public class SceneViewPanel : Panel
     {
@@ -41,12 +50,10 @@ namespace ElintriaEngine.UI.Panels
 
         private GizmoRenderer Gizmos => _sceneRenderer.Gizmos;
 
-        // ── Navigation ─────────────────────────────────────────────────────────
+        // ── Navigation state ───────────────────────────────────────────────────
         private bool _rightHeld;
         private bool _panning;
         private PointF _lastMouse;
-
-        // Fly-cam keys (active only while _rightHeld)
         private bool _flyW, _flyS, _flyA, _flyD, _flyQ, _flyE;
 
         // ── Transform handle drag ──────────────────────────────────────────────
@@ -90,6 +97,9 @@ namespace ElintriaEngine.UI.Panels
             Bounds.Width, Bounds.Height - TopBarsH);
         public RectangleF SceneRect => ViewportRect;
 
+        // ── Prefs shortcut ─────────────────────────────────────────────────────
+        private static EditorPreferences Prefs => EditorPreferences.Instance;
+
         // ══════════════════════════════════════════════════════════════════════
         //  Render
         // ══════════════════════════════════════════════════════════════════════
@@ -117,13 +127,11 @@ namespace ElintriaEngine.UI.Panels
             r.FillRect(bar, CTabBg);
             r.DrawLine(new PointF(bar.X, bar.Bottom), new PointF(bar.Right, bar.Bottom),
                        Color.FromArgb(255, 50, 50, 55));
-
             _sceneTabRect = new RectangleF(bar.X + 4f, bar.Y + 2f, TabW, TabBarH - 4f);
             _gameTabRect = new RectangleF(bar.X + TabW + 10f, bar.Y + 2f, TabW, TabBarH - 4f);
             DrawTab(r, _sceneTabRect, "Scene", _activeTab == ViewTab.Scene, Color.FromArgb(255, 100, 165, 255));
             DrawTab(r, _gameTabRect, "Game", _activeTab == ViewTab.Game,
                     IsPlaying ? CPlaying : Color.FromArgb(255, 100, 165, 255));
-
             if (IsPlaying)
             {
                 var badge = IsPaused ? CPaused : CPlaying;
@@ -157,20 +165,15 @@ namespace ElintriaEngine.UI.Panels
             r.DrawLine(new PointF(_toolbarRect.X, _toolbarRect.Bottom),
                        new PointF(_toolbarRect.Right, _toolbarRect.Bottom),
                        Color.FromArgb(255, 45, 45, 50));
-
             float x = _toolbarRect.X + 4f, y = _toolbarRect.Y + 2f, h = ToolbarH - 4f;
-
             _btnMove = new RectangleF(x, y, 46f, h); x += 50f;
             _btnRotate = new RectangleF(x, y, 46f, h); x += 54f;
             DrawToolBtn(r, _btnMove, "Move", Gizmos.ActiveTool == GizmoRenderer.TransformTool.Move);
             DrawToolBtn(r, _btnRotate, "Rotate", Gizmos.ActiveTool == GizmoRenderer.TransformTool.Rotate);
-
             r.DrawLine(new PointF(x + 1f, y + 2f), new PointF(x + 1f, y + h - 2f), Color.FromArgb(255, 55, 55, 60));
             x += 6f;
-
             _btnGizmoAll = new RectangleF(x, y, 52f, h); x += 56f;
             DrawToolBtn(r, _btnGizmoAll, "Gizmos", Gizmos.ShowAll);
-
             if (Gizmos.ShowAll)
             {
                 _btnCam = new RectangleF(x, y, 38f, h); x += 42f;
@@ -203,21 +206,18 @@ namespace ElintriaEngine.UI.Panels
                 r.DrawText("Right-click Hierarchy → Create to add objects",
                     new PointF(hint.X + 8f, hint.Y + 6f), Color.FromArgb(200, 200, 200, 200), 10f);
             }
-
             DrawGizmoLabels(r, vp);
-
             var cam = _sceneRenderer.Camera;
             string ci = $"Yaw:{cam.Yaw:F0}°  Pitch:{cam.Pitch:F0}°  Dist:{cam.Distance:F1}";
             r.DrawText(ci, new PointF(vp.Right - ci.Length * 5.4f - 8f, vp.Bottom - 16f),
                 Color.FromArgb(180, 130, 130, 130), 9f);
-
             string nav = _rightHeld
                 ? "RMB: look  WASD=fly  Q/E=down/up"
                 : (_sceneRenderer.Selected != null
                     ? (Gizmos.ActiveTool == GizmoRenderer.TransformTool.Move
                         ? "W=Move  E=Rotate  drag arrows to move"
                         : "W=Move  E=Rotate  drag rings to rotate")
-                    : "RMB+drag=look  hold RMB+WASD=fly  MMB=pan");
+                    : "RMB+drag=look  hold RMB+WASD=fly  MMB=pan  scroll=zoom");
             r.DrawText(nav, new PointF(vp.X + 6f, vp.Bottom - 16f), Color.FromArgb(140, 180, 180, 180), 9f);
         }
 
@@ -225,8 +225,7 @@ namespace ElintriaEngine.UI.Panels
         {
             if (!Gizmos.ShowAll || _scene == null) return;
             var view = _sceneRenderer.Camera.GetViewMatrix();
-            var proj = _sceneRenderer.Camera.GetProjectionMatrix(vp.Width / Math.Max(vp.Height, 1f));
-
+            var proj = _sceneRenderer.Camera.GetProjectionMatrix(vp.Width / MathF.Max(vp.Height, 1f));
             foreach (var go in _scene.All())
             {
                 if (!go.ActiveSelf) continue;
@@ -267,29 +266,38 @@ namespace ElintriaEngine.UI.Panels
         }
 
         // ══════════════════════════════════════════════════════════════════════
-        //  Update — fly-cam
+        //  Update — smooth fly-cam
         // ══════════════════════════════════════════════════════════════════════
         public override void OnUpdate(double dt)
         {
+            // Tick all particle systems in the scene (editor preview)
+            if (_activeTab == ViewTab.Scene && _scene != null)
+            {
+                foreach (var go in _scene.RootObjects)
+                    TickParticlesRecursive(go, (float)dt);
+            }
+
             if (!_rightHeld || _activeTab != ViewTab.Scene) return;
             if (!(_flyW || _flyS || _flyA || _flyD || _flyQ || _flyE)) return;
 
             var cam = _sceneRenderer.Camera;
-            var view = cam.GetViewMatrix();
-            var right = new Vector3(view.Row0.X, view.Row0.Y, view.Row0.Z);
-            var forward = Vector3.Normalize(cam.Target - cam.Position);
-            float speed = Math.Max(cam.Distance * 1.5f, 0.5f) * (float)dt;
+            var fwd = cam.Forward;   // actual look direction (may point up/down)
+            var right = cam.Right;     // horizontal-only right vector
+
+            // Speed scales with how far you are from your "target" so it always feels
+            // responsive whether you're inspecting small details or flying across a level.
+            float spd = Prefs.FlyCamSpeed * Math.Max(cam.Distance * 0.12f, 0.5f) * (float)dt;
 
             var move = Vector3.Zero;
-            if (_flyW) move += forward;
-            if (_flyS) move -= forward;
+            if (_flyW) move += fwd;             // W/S follow actual look direction (with pitch)
+            if (_flyS) move -= fwd;
             if (_flyD) move += right;
             if (_flyA) move -= right;
-            if (_flyE) move += Vector3.UnitY;
+            if (_flyE) move += Vector3.UnitY;   // Q/E always world-vertical
             if (_flyQ) move -= Vector3.UnitY;
 
             if (move.LengthSquared > 0.0001f)
-                cam.Target += Vector3.Normalize(move) * speed;
+                cam.Move(Vector3.Normalize(move) * spd);
         }
 
         // ══════════════════════════════════════════════════════════════════════
@@ -301,28 +309,23 @@ namespace ElintriaEngine.UI.Panels
             float dx = pos.X - _lastMouse.X;
             float dy = pos.Y - _lastMouse.Y;
             _lastMouse = pos;
-
             if (_activeTab != ViewTab.Scene) { base.OnMouseMove(pos); return; }
 
-            if (_handleDragging && Gizmos.HandleTarget != null)
-            { ApplyHandleDrag(dx, dy); return; }
+            if (_handleDragging && Gizmos.HandleTarget != null) { ApplyHandleDrag(dx, dy); return; }
 
             var cam = _sceneRenderer.Camera;
 
             if (_rightHeld)
             {
-                cam.Yaw += dx * 0.35f;
-                cam.Pitch = Math.Clamp(cam.Pitch - dy * 0.35f, -89f, 89f);
+                // FPS-style: camera stays in position, view direction changes
+                float sens = Prefs.MouseSensitivity;
+                float yMult = Prefs.InvertYAxis ? -1f : 1f;
+                cam.LookAround(dx * sens, dy * sens * yMult);
                 return;
             }
             if (_panning)
             {
-                var view = cam.GetViewMatrix();
-                var right = new Vector3(view.Row0.X, view.Row0.Y, view.Row0.Z);
-                var up = new Vector3(view.Row1.X, view.Row1.Y, view.Row1.Z);
-                float spd = cam.Distance * 0.002f;
-                cam.Target -= right * (dx * spd);
-                cam.Target += up * (dy * spd);
+                cam.Pan(dx, dy);
                 return;
             }
             base.OnMouseMove(pos);
@@ -343,14 +346,14 @@ namespace ElintriaEngine.UI.Panels
                         float xSign = Vector3.Dot(_dragCamRight, Vector3.UnitX) >= 0 ? 1f : -1f;
                         t.LocalPosition = new Vector3(pos.X + dx * speed * xSign, pos.Y, pos.Z);
                         break;
-                    case 1: // Y axis (screen up = world up)
+                    case 1: // Y axis — screen vertical maps to world Y
                         t.LocalPosition = new Vector3(pos.X, pos.Y - dy * speed, pos.Z);
                         break;
                     case 2: // Z axis
                         float zSign = Vector3.Dot(_dragCamRight, Vector3.UnitZ) >= 0 ? 1f : -1f;
                         t.LocalPosition = new Vector3(pos.X, pos.Y, pos.Z + dx * speed * zSign);
                         break;
-                    case 3: // XZ plane
+                    case 3: // XZ plane — drag in camera right/forward
                         t.LocalPosition = pos
                             + _dragCamRight * (dx * speed)
                             - _dragCamForward * (dy * speed);
@@ -376,7 +379,6 @@ namespace ElintriaEngine.UI.Panels
         public override void OnMouseDown(MouseButtonEventArgs e, PointF pos)
         {
             _mouse = pos;
-
             if (_toolbarRect.Contains(pos) && e.Button == MouseButton.Left)
             { HandleToolbarClick(pos); return; }
             if (_sceneTabRect.Contains(pos)) { _activeTab = ViewTab.Scene; return; }
@@ -388,13 +390,9 @@ namespace ElintriaEngine.UI.Panels
             {
                 IsFocused = true;
                 _lastMouse = pos;
-
-                if (e.Button == MouseButton.Left)
-                    TryStartHandleDrag(pos);
-                else if (e.Button == MouseButton.Right)
-                    _rightHeld = true;
-                else if (e.Button == MouseButton.Middle)
-                    _panning = true;
+                if (e.Button == MouseButton.Left) TryStartHandleDrag(pos);
+                else if (e.Button == MouseButton.Right) _rightHeld = true;
+                else if (e.Button == MouseButton.Middle) _panning = true;
             }
             else base.OnMouseDown(e, pos);
         }
@@ -414,11 +412,9 @@ namespace ElintriaEngine.UI.Panels
         private bool TryStartHandleDrag(PointF pos)
         {
             if (Gizmos.HandleTarget == null || Gizmos.LastHandles.Count == 0) return false;
-
-            const float HitRadius = 18f;   // generous hit radius in screen pixels
+            const float HitRadius = 18f;
             int bestAxis = -1;
             float bestDist = float.MaxValue;
-
             foreach (var h in Gizmos.LastHandles)
             {
                 float ddx = pos.X - h.ScreenTip.X;
@@ -427,20 +423,15 @@ namespace ElintriaEngine.UI.Panels
                 if (d2 < HitRadius * HitRadius && d2 < bestDist)
                 { bestDist = d2; bestAxis = h.Axis; }
             }
-
             if (bestAxis < 0) return false;
-
             _handleDragging = true;
             _handleAxis = bestAxis;
-
-            // Cache camera basis once at drag start
-            var view = _sceneRenderer.Camera.GetViewMatrix();
-            _dragCamRight = new Vector3(view.Row0.X, view.Row0.Y, view.Row0.Z);
-            // Row2 is the -forward in view space; negate it and flatten to ground
-            _dragCamForward = new Vector3(-view.Row2.X, 0f, -view.Row2.Z);
-            if (_dragCamForward.LengthSquared > 0.0001f)
-                _dragCamForward = Vector3.Normalize(_dragCamForward);
-
+            var cam = _sceneRenderer.Camera;
+            _dragCamRight = cam.Right;
+            // Flatten cam forward to ground plane for XZ drag
+            var fwd = cam.Forward;
+            _dragCamForward = Vector3.Normalize(new Vector3(fwd.X, 0f, fwd.Z));
+            if (float.IsNaN(_dragCamForward.X)) _dragCamForward = fwd;
             return true;
         }
 
@@ -455,8 +446,9 @@ namespace ElintriaEngine.UI.Panels
         public override void OnMouseScroll(float delta)
         {
             if (!IsVisible || _activeTab != ViewTab.Scene) return;
+            float speed = Prefs.ScrollSpeed;
             _sceneRenderer.Camera.Distance =
-                Math.Clamp(_sceneRenderer.Camera.Distance * (1f - delta * 0.12f), 0.05f, 2000f);
+                Math.Clamp(_sceneRenderer.Camera.Distance * (1f - delta * speed), 0.05f, 2000f);
         }
 
         // ══════════════════════════════════════════════════════════════════════
@@ -466,49 +458,60 @@ namespace ElintriaEngine.UI.Panels
         {
             if (!IsFocused || _activeTab != ViewTab.Scene) return;
 
-            // Always track fly keys so they work once right is pressed
-            switch (e.Key)
-            {
-                case Keys.W: _flyW = true; break;
-                case Keys.S: _flyS = true; break;
-                case Keys.A: _flyA = true; break;
-                case Keys.D: _flyD = true; break;
-                case Keys.Q: _flyQ = true; break;
-                case Keys.E: _flyE = true; break;
-            }
+            // Track fly keys — they activate only when RMB is held (checked in OnUpdate)
+            if (BindMatches(e, EditorAction.FlyForward)) _flyW = true;
+            if (BindMatches(e, EditorAction.FlyBackward)) _flyS = true;
+            if (BindMatches(e, EditorAction.FlyLeft)) _flyA = true;
+            if (BindMatches(e, EditorAction.FlyRight)) _flyD = true;
+            if (BindMatches(e, EditorAction.FlyUp)) _flyE = true;
+            if (BindMatches(e, EditorAction.FlyDown)) _flyQ = true;
 
-            // Tool / view shortcuts only when NOT holding right-click (not flying)
+            // Tool / view shortcuts — only when NOT holding RMB
             if (!_rightHeld)
             {
                 var cam = _sceneRenderer.Camera;
-                switch (e.Key)
+                if (BindMatches(e, EditorAction.MoveTool))
+                    Gizmos.ActiveTool = GizmoRenderer.TransformTool.Move;
+                if (BindMatches(e, EditorAction.RotateTool))
+                    Gizmos.ActiveTool = GizmoRenderer.TransformTool.Rotate;
+                if (BindMatches(e, EditorAction.FrameSelected))
                 {
-                    case Keys.W: Gizmos.ActiveTool = GizmoRenderer.TransformTool.Move; break;
-                    case Keys.E: Gizmos.ActiveTool = GizmoRenderer.TransformTool.Rotate; break;
-                    case Keys.F:
-                        if (_sceneRenderer.Selected != null)
-                        { cam.Target = _sceneRenderer.Selected.Transform.LocalPosition; cam.Distance = 6f; }
-                        else
-                        { cam.Target = Vector3.Zero; cam.Distance = 8f; cam.Yaw = 45f; cam.Pitch = 25f; }
-                        break;
-                    case Keys.Up: cam.Yaw = 0f; cam.Pitch = 0f; break;
-                    case Keys.Right: cam.Yaw = 90f; cam.Pitch = 0f; break;
-                    case Keys.Left: cam.Yaw = 45f; cam.Pitch = 89f; break;
+                    if (_sceneRenderer.Selected != null)
+                    { cam.Target = _sceneRenderer.Selected.Transform.LocalPosition; cam.Distance = 6f; }
+                    else
+                    { cam.Target = Vector3.Zero; cam.Distance = 8f; cam.Yaw = 45f; cam.Pitch = 25f; }
                 }
+                if (BindMatches(e, EditorAction.ViewFront)) { cam.Yaw = 0f; cam.Pitch = 0f; }
+                if (BindMatches(e, EditorAction.ViewRight)) { cam.Yaw = 90f; cam.Pitch = 0f; }
+                if (BindMatches(e, EditorAction.ViewTop)) { cam.Yaw = 45f; cam.Pitch = 89f; }
             }
         }
 
         public override void OnKeyUp(KeyboardKeyEventArgs e)
         {
-            switch (e.Key)
-            {
-                case Keys.W: _flyW = false; break;
-                case Keys.S: _flyS = false; break;
-                case Keys.A: _flyA = false; break;
-                case Keys.D: _flyD = false; break;
-                case Keys.Q: _flyQ = false; break;
-                case Keys.E: _flyE = false; break;
-            }
+            if (BindMatches(e, EditorAction.FlyForward)) _flyW = false;
+            if (BindMatches(e, EditorAction.FlyBackward)) _flyS = false;
+            if (BindMatches(e, EditorAction.FlyLeft)) _flyA = false;
+            if (BindMatches(e, EditorAction.FlyRight)) _flyD = false;
+            if (BindMatches(e, EditorAction.FlyUp)) _flyE = false;
+            if (BindMatches(e, EditorAction.FlyDown)) _flyQ = false;
+        }
+
+        private static bool BindMatches(KeyboardKeyEventArgs e, EditorAction action)
+        {
+            var kb = EditorPreferences.Instance.GetKeybind(action);
+            bool ctrl = e.Modifiers.HasFlag(KeyModifiers.Control);
+            bool shift = e.Modifiers.HasFlag(KeyModifiers.Shift);
+            bool alt = e.Modifiers.HasFlag(KeyModifiers.Alt);
+            return kb.Key == e.Key && kb.Ctrl == ctrl && kb.Shift == shift && kb.Alt == alt;
+        }
+
+        private static void TickParticlesRecursive(Core.GameObject go, float dt)
+        {
+            var ps = go.GetComponent<Core.ParticleSystem>();
+            if (ps != null && ps.IsPlaying) ps.Tick(dt);
+            foreach (var child in go.Children)
+                TickParticlesRecursive(child, dt);
         }
 
         private void ClearFlyKeys() => _flyW = _flyS = _flyA = _flyD = _flyQ = _flyE = false;
