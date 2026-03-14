@@ -76,6 +76,10 @@ namespace ElintriaEngine.UI
             Inspector.SceneView = SceneView;
             Inspector.Scene = _scene;
             Inspector.ProjectRoot = projectRoot;
+            Inspector.AssetsRoot = System.IO.Directory.Exists(
+                System.IO.Path.Combine(projectRoot, "Assets"))
+                ? System.IO.Path.Combine(projectRoot, "Assets")
+                : projectRoot;
             Project = new ProjectPanel(new RectangleF(HierW, MenuH + viewH, midW, ProjH));
 
             BuildSettings = new BuildSettingsPanel(
@@ -209,6 +213,10 @@ namespace ElintriaEngine.UI
             SceneView.SetScene(_scene);
             BuildSettings.SetScene(_scene);
             Inspector.Scene = _scene;
+            Inspector.AssetsRoot = System.IO.Directory.Exists(
+                System.IO.Path.Combine(_projectRoot, "Assets"))
+                ? System.IO.Path.Combine(_projectRoot, "Assets")
+                : _projectRoot;
             Inspector.Inspect(null);
             // Re-resolve scripts so hot-reloaded types work immediately
             Core.SceneRunner.LoadUserScripts(_projectRoot);
@@ -575,6 +583,22 @@ namespace ElintriaEngine.UI
                 return;
             }
 
+            // ── Prefab drop onto inspector ref field ──────────────────────────
+            if (Project.ActiveDrag != null
+                && Project.ActiveDrag.Type == AssetType.Prefab
+                && Inspector.IsVisible
+                && Inspector.ContainsPoint(pos))
+            {
+                string? fid = Inspector.GetObjectRefFieldAt(pos);
+                if (fid != null)
+                {
+                    Inspector.AcceptPrefabDrop(fid, Project.ActiveDrag.FullPath);
+                    Inspector.HoveredDropFieldId = null;
+                    foreach (var p in PanelZOrder()) p.OnMouseUp(e, pos);
+                    return;
+                }
+            }
+
             // ── Prefab drop onto SceneView or Hierarchy → instantiate ─────────
             if (Project.ActiveDrag != null
                 && Project.ActiveDrag.Type == AssetType.Prefab
@@ -684,6 +708,12 @@ namespace ElintriaEngine.UI
             bool draggingPrefab = Project.ActiveDrag?.Type == AssetType.Prefab;
             SceneView.PrefabDropHighlight = draggingPrefab && SceneView.IsVisible && SceneView.ContainsPoint(pos);
             Hierarchy.PrefabDropHighlight = draggingPrefab && Hierarchy.IsVisible && Hierarchy.ContainsPoint(pos);
+
+            // Highlight inspector ref fields when dragging a prefab over them
+            if (draggingPrefab && Inspector.IsVisible && Inspector.ContainsPoint(pos))
+                Inspector.HoveredDropFieldId = Inspector.GetObjectRefFieldAt(pos);
+            else if (!draggingPrefab && Project.ActiveDrag?.Type != AssetType.Script)
+                Inspector.HoveredDropFieldId = null;
 
             MenuBar.OnMouseMove(pos);
 

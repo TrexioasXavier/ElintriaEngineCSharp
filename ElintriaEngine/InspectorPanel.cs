@@ -31,6 +31,9 @@ namespace ElintriaEngine.UI.Panels
         /// <summary>Set by EditorLayout so the picker can scan prefab files.</summary>
         public string ProjectRoot { get; set; } = "";
 
+        /// <summary>The actual Assets folder (may differ from ProjectRoot/Assets on some setups).</summary>
+        public string AssetsRoot { get; set; } = "";
+
         private bool _dropHighlight;
 
         // Fields rendered this frame (rebuilt each render)
@@ -79,6 +82,46 @@ namespace ElintriaEngine.UI.Panels
         private GameObject? _pendingDropGO;
         public void AcceptGODrop(string fieldId, GameObject go)
         { _pendingDropFieldId = fieldId; _pendingDropGO = go; }
+
+        /// <summary>
+        /// Called by EditorLayout when a .prefab file is dropped onto a ref field.
+        /// Loads the prefab, extracts the required component (or GO), and assigns it.
+        /// If the field needs a Component, the prefab GO is also added to the scene so
+        /// the component lives inside a real scene object.
+        /// </summary>
+        public void AcceptPrefabDrop(string fieldId, string prefabPath)
+        {
+            foreach (var f in _fields)
+            {
+                if (f.Id != fieldId) continue;
+
+                var prefabGO = Core.SceneSerializer.LoadPrefab(prefabPath);
+                if (prefabGO == null) break;
+
+                if (f.FieldType == typeof(Core.GameObject))
+                {
+                    // Add the prefab to the scene and assign the GO
+                    Scene?.AddGameObject(prefabGO);
+                    f.Setter(prefabGO);
+                }
+                else if (typeof(Core.Component).IsAssignableFrom(f.FieldType))
+                {
+                    var comp = prefabGO.GetComponentByType(f.FieldType);
+                    if (comp != null)
+                    {
+                        // Prefab must live in the scene for the component ref to be valid
+                        Scene?.AddGameObject(prefabGO);
+                        f.Setter(comp);
+                    }
+                    else
+                    {
+                        Console.WriteLine(
+                            $"[Inspector] Prefab '{prefabGO.Name}' has no {f.FieldType.Name} component.");
+                    }
+                }
+                break;
+            }
+        }
 
         // Called once per frame by EditorLayout so inspector can apply queued drops
         public void FlushGODrops()
@@ -726,7 +769,7 @@ namespace ElintriaEngine.UI.Panels
             bool wantsGO = _refPickerType == typeof(Core.GameObject);
             bool wantsComp = !wantsGO && typeof(Core.Component).IsAssignableFrom(_refPickerType);
 
-            // ── Scene GameObjects ────────────────────────────────────────────
+            // ── Scene GameObjects ─────────────────────────────────────────────
             if (Scene != null)
             {
                 foreach (var go in Scene.All())
@@ -755,17 +798,44 @@ namespace ElintriaEngine.UI.Panels
                 }
             }
 
-            // ── Prefab files ─────────────────────────────────────────────────
+            // ── Prefab files — scan all candidate directories ─────────────────
+            // Build a de-duplicated set of directories to search.
+            var scanDirs = new System.Collections.Generic.HashSet<string>(
+                StringComparer.OrdinalIgnoreCase);
+
+            // 1. Explicit AssetsRoot (most reliable — set from Project panel root)
+            if (!string.IsNullOrEmpty(AssetsRoot) && System.IO.Directory.Exists(AssetsRoot))
+                scanDirs.Add(AssetsRoot);
+
+            // 2. ProjectRoot/Assets fallback
             if (!string.IsNullOrEmpty(ProjectRoot))
             {
-                string assets = System.IO.Path.Combine(ProjectRoot, "Assets");
-                if (!System.IO.Directory.Exists(assets)) assets = ProjectRoot;
+                string pa = System.IO.Path.Combine(ProjectRoot, "Assets");
+                if (System.IO.Directory.Exists(pa)) scanDirs.Add(pa);
+                // 3. ProjectRoot itself in case no Assets subfolder exists
+                if (System.IO.Directory.Exists(ProjectRoot)) scanDirs.Add(ProjectRoot);
+            }
+
+            foreach (var dir in scanDirs)
+            {
                 try
                 {
                     foreach (var file in System.IO.Directory.GetFiles(
-                        assets, "*.prefab", System.IO.SearchOption.AllDirectories))
+                        dir, "*.prefab", System.IO.SearchOption.AllDirectories))
                     {
-                        var prefabGO = Core.SceneSerializer.LoadPrefab(file);
+                        // Skip duplicates (same file found via two scan dirs)
+                        if (_refPickerEntries.Any(e => e.IsPrefab &&
+                                string.Equals(e.PrefabPath, file,
+                                    StringComparison.OrdinalIgnoreCase)))
+                            continue;
+
+                        Core.GameObject? prefabGO = null;
+                        try { prefabGO = Core.SceneSerializer.LoadPrefab(file); }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[Picker] Failed to load prefab '{file}': {ex.Message}");
+                            continue;
+                        }
                         if (prefabGO == null) continue;
 
                         if (wantsGO)
@@ -781,7 +851,8 @@ namespace ElintriaEngine.UI.Panels
                         }
                         else if (wantsComp)
                         {
-                            var comp = prefabGO.GetComponentByType(_refPickerType);
+                            // Check the root GO and all its children
+                            var comp = FindComponentInHierarchy(prefabGO, _refPickerType);
                             if (comp != null)
                                 _refPickerEntries.Add(new RefPickerEntry
                                 {
@@ -789,14 +860,33 @@ namespace ElintriaEngine.UI.Panels
                                     SubLabel = $"(Prefab • {_refPickerType.Name})",
                                     IsPrefab = true,
                                     PrefabPath = file,
-                                    GO = prefabGO,
+                                    GO = comp.GameObject ?? prefabGO,
                                     Component = comp,
                                 });
                         }
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Picker] Prefab scan error in '{dir}': {ex.Message}");
+                }
             }
+
+            Console.WriteLine($"[Picker] Built {_refPickerEntries.Count} entries " +
+                              $"(type={_refPickerType.Name}, scanDirs={scanDirs.Count})");
+        }
+
+        /// <summary>Searches a GO and all its descendants for a component of the given type.</summary>
+        private static Core.Component? FindComponentInHierarchy(Core.GameObject go, Type t)
+        {
+            var c = go.GetComponentByType(t);
+            if (c != null) return c;
+            foreach (var child in go.Children)
+            {
+                c = FindComponentInHierarchy(child, t);
+                if (c != null) return c;
+            }
+            return null;
         }
 
         private IEnumerable<RefPickerEntry> FilteredPickerEntries()
