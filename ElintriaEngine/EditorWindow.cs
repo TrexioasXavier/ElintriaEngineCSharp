@@ -34,9 +34,7 @@ namespace ElintriaEngine
 
         // Constructor takes no projectRoot — the launcher is always shown first.
         public EditorWindow(GameWindowSettings gs, NativeWindowSettings ns)
-            : base(gs, ns) {  
-
-        }
+            : base(gs, ns) { }
 
         protected override void OnLoad()
         {
@@ -203,6 +201,19 @@ namespace ElintriaEngine
             base.OnTextInput(e);
             _launcher?.OnTextInput(e);
             _layout?.OnTextInput(e);
+        }
+
+        protected override void OnFileDrop(FileDropEventArgs e)
+        {
+            base.OnFileDrop(e);
+            // Forward OS file-drop events to the editor layout.
+            // Works whether the user drags onto the project panel or anywhere
+            // in the window — files are copied into the appropriate Assets subfolder.
+            if (_layout != null && e.FileNames.Length > 0)
+            {
+                _layout.ImportFiles(e.FileNames);
+                Console.WriteLine($"[Editor] File drop: {e.FileNames.Length} file(s) received.");
+            }
         }
 
         private PointF ScaledMP()

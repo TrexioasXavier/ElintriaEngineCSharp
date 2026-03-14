@@ -483,6 +483,34 @@ namespace ElintriaEngine.Rendering.Scene
             _defaultMat?.Dispose();
             Gizmos.Dispose();
         }
+
+        /// <summary>
+        /// Loads a model file (.obj / .fbx) into the mesh cache keyed by the full path.
+        /// Returns the cache key on success, or null with an error logged on failure.
+        /// Safe to call multiple times — skips loading if already cached.
+        /// </summary>
+        public string? LoadModelFromFile(string filePath)
+        {
+            // Normalise to lowercase for case-insensitive matching across platforms
+            string key = filePath.ToLowerInvariant();
+            if (_meshCache.ContainsKey(key)) return key;
+
+            var (verts, indices, err) = ModelLoader.Load(filePath);
+
+            if (verts.Length == 0 || indices.Length == 0)
+            {
+                Console.WriteLine($"[SceneRenderer] Model load failed '{System.IO.Path.GetFileName(filePath)}': {err}");
+                return null;   // do NOT cache failures — allow retry on next drop
+            }
+
+            var mesh = Mesh.FromArrays(key, verts, indices);
+            _meshCache[key] = mesh;
+            Console.WriteLine($"[SceneRenderer] Loaded '{System.IO.Path.GetFileName(filePath)}' " +
+                              $"— {indices.Length / 3} tris, {verts.Length / 8} verts");
+            return key;
+        }
+
+        public bool IsModelLoaded(string key) => _meshCache.ContainsKey(key.ToLowerInvariant());
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

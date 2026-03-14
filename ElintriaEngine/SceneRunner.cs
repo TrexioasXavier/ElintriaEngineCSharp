@@ -157,6 +157,9 @@ namespace ElintriaEngine.Core
             _fixedAccum = 0;
             _pendingStart.Clear();
 
+            // Make the physics system aware of the active scene
+            Physics.SetScene(scene);
+
             // Step 1 — load compiled user scripts
             LoadUserScripts(projectRoot);
 
@@ -213,6 +216,7 @@ namespace ElintriaEngine.Core
             _pendingStart.Clear();
             _started = false;
             _scene = null;
+            Physics.SetScene(null);
             Stopped?.Invoke();
         }
 

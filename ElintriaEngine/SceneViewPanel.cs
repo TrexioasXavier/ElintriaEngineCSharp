@@ -1,10 +1,11 @@
-﻿using System;
-using System.Drawing;
+﻿using ElintriaEngine.Core;
+using ElintriaEngine.Rendering;
+using ElintriaEngine.Rendering.Scene;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.GraphicsLibraryFramework;
-using ElintriaEngine.Core;
-using ElintriaEngine.Rendering.Scene;
+using System;
+using System.Drawing;
 
 namespace ElintriaEngine.UI.Panels
 {
@@ -49,7 +50,7 @@ namespace ElintriaEngine.UI.Panels
         public bool PrefabDropHighlight { get; set; }
         public Core.UIDocument? UIDocument { get; set; }
 
-        private ElintriaEngine.Rendering.GizmoRenderer Gizmos => _sceneRenderer.Gizmos;
+        private GizmoRenderer Gizmos => _sceneRenderer.Gizmos;
 
         // ── Navigation state ───────────────────────────────────────────────────
         private bool _rightHeld;
@@ -96,6 +97,53 @@ namespace ElintriaEngine.UI.Panels
         public void SetSelected(GameObject? go) => _sceneRenderer.Selected = go;
         public bool ColliderEditMode => Gizmos.ColliderEditMode;
         public void SetColliderEditMode(bool on) { Gizmos.ColliderEditMode = on; _colliderDragging = false; }
+
+        /// <summary>
+        /// Unprojects a screen point into the scene. Intersects the ray with
+        /// the horizontal ground plane (y = 0) or, if the ray is parallel to the
+        /// ground, returns a point 5 units in front of the camera.
+        /// </summary>
+        public OpenTK.Mathematics.Vector3 GetWorldPositionAtMouse(System.Drawing.PointF screenPos)
+        {
+            var vp = ViewportRect;
+            var cam = _sceneRenderer.Camera;
+            var view = cam.GetViewMatrix();
+            var proj = cam.GetProjectionMatrix(vp.Width / MathF.Max(vp.Height, 1f));
+
+            float ndcX = (screenPos.X - vp.X) / vp.Width * 2f - 1f;
+            float ndcY = 1f - (screenPos.Y - vp.Y) / vp.Height * 2f;
+
+            var invProj = OpenTK.Mathematics.Matrix4.Invert(proj);
+            var invView = OpenTK.Mathematics.Matrix4.Invert(view);
+
+            // Unproject clip-space point through inverse projection
+            var clip = new OpenTK.Mathematics.Vector4(ndcX, ndcY, 1f, 1f);
+            var eye = MultiplyMV(invProj, clip);
+            eye /= eye.W;
+
+            // Transform eye-space ray direction into world space
+            var world4 = MultiplyMV(invView, new OpenTK.Mathematics.Vector4(eye.X, eye.Y, eye.Z, 0f));
+            var dir = OpenTK.Mathematics.Vector3.Normalize(
+                             new OpenTK.Mathematics.Vector3(world4.X, world4.Y, world4.Z));
+
+            // Intersect with y = 0 ground plane
+            float denom = dir.Y;
+            if (MathF.Abs(denom) > 1e-5f)
+            {
+                float t = -cam.Position.Y / denom;
+                if (t > 0f) return cam.Position + dir * t;
+            }
+            return cam.Position + cam.Forward * 5f;
+        }
+
+        /// <summary>Multiplies a Matrix4 by a Vector4 (column-vector convention).</summary>
+        private static OpenTK.Mathematics.Vector4 MultiplyMV(
+            OpenTK.Mathematics.Matrix4 m, OpenTK.Mathematics.Vector4 v) =>
+            new(
+                m.M11 * v.X + m.M12 * v.Y + m.M13 * v.Z + m.M14 * v.W,
+                m.M21 * v.X + m.M22 * v.Y + m.M23 * v.Z + m.M24 * v.W,
+                m.M31 * v.X + m.M32 * v.Y + m.M33 * v.Z + m.M34 * v.W,
+                m.M41 * v.X + m.M42 * v.Y + m.M43 * v.Z + m.M44 * v.W);
         public void Init() => _sceneRenderer.Init();
         public SceneRenderer Renderer => _sceneRenderer;
 
@@ -207,8 +255,8 @@ namespace ElintriaEngine.UI.Panels
             float x = _toolbarRect.X + 4f, y = _toolbarRect.Y + 2f, h = ToolbarH - 4f;
             _btnMove = new RectangleF(x, y, 46f, h); x += 50f;
             _btnRotate = new RectangleF(x, y, 46f, h); x += 54f;
-            DrawToolBtn(r, _btnMove, "Move", Gizmos.ActiveTool == ElintriaEngine.Rendering.GizmoRenderer.TransformTool.Move);
-            DrawToolBtn(r, _btnRotate, "Rotate", Gizmos.ActiveTool == ElintriaEngine.Rendering.GizmoRenderer.TransformTool.Rotate);
+            DrawToolBtn(r, _btnMove, "Move", Gizmos.ActiveTool == GizmoRenderer.TransformTool.Move);
+            DrawToolBtn(r, _btnRotate, "Rotate", Gizmos.ActiveTool == GizmoRenderer.TransformTool.Rotate);
             r.DrawLine(new PointF(x + 1f, y + 2f), new PointF(x + 1f, y + h - 2f), Color.FromArgb(255, 55, 55, 60));
             x += 6f;
             _btnGizmoAll = new RectangleF(x, y, 52f, h); x += 56f;
@@ -253,7 +301,7 @@ namespace ElintriaEngine.UI.Panels
             string nav = _rightHeld
                 ? "RMB: look  WASD=fly  Q/E=down/up"
                 : (_sceneRenderer.Selected != null
-                    ? (Gizmos.ActiveTool == ElintriaEngine.Rendering.GizmoRenderer.TransformTool.Move
+                    ? (Gizmos.ActiveTool == GizmoRenderer.TransformTool.Move
                         ? "W=Move  E=Rotate  drag arrows to move"
                         : "W=Move  E=Rotate  drag rings to rotate")
                     : "RMB+drag=look  hold RMB+WASD=fly  MMB=pan  scroll=zoom");
@@ -274,7 +322,7 @@ namespace ElintriaEngine.UI.Panels
                 bool hasAu = Gizmos.ShowAudio && go.GetComponent<Core.AudioSource>() != null;
                 string? icon = hasCam ? "[Cam]" : hasDL ? "[Sun]" : hasSL ? "[Spot]" : hasAu ? "[Audio]" : null;
                 if (icon == null) continue;
-                var scr = ElintriaEngine.Rendering.GizmoRenderer.WorldToScreen(go.Transform.LocalPosition, view, proj, vp);
+                var scr = GizmoRenderer.WorldToScreen(go.Transform.LocalPosition, view, proj, vp);
                 if (scr.X < vp.X || scr.X > vp.Right || scr.Y < vp.Y || scr.Y > vp.Bottom) continue;
                 r.DrawText(icon, new PointF(scr.X + 8f, scr.Y - 6f), Color.FromArgb(220, 255, 230, 100), 9f);
             }
@@ -309,8 +357,10 @@ namespace ElintriaEngine.UI.Panels
         // ══════════════════════════════════════════════════════════════════════
         public override void OnUpdate(double dt)
         {
-            // Tick all particle systems in the scene (editor preview)
-            if (_activeTab == ViewTab.Scene && _scene != null)
+            // Tick particle systems:
+            // • Scene tab: always (editor preview)
+            // • Game tab: only during play mode (runtime simulation)
+            if (_scene != null && (_activeTab == ViewTab.Scene || IsPlaying))
             {
                 foreach (var go in _scene.RootObjects)
                     TickParticlesRecursive(go, (float)dt);
@@ -380,7 +430,7 @@ namespace ElintriaEngine.UI.Panels
             var go = Gizmos.HandleTarget!;
             var t = go.Transform;
 
-            if (Gizmos.ActiveTool == ElintriaEngine.Rendering.GizmoRenderer.TransformTool.Move)
+            if (Gizmos.ActiveTool == GizmoRenderer.TransformTool.Move)
             {
                 float speed = _sceneRenderer.Camera.Distance * 0.006f;
                 var pos = t.LocalPosition;
@@ -404,7 +454,7 @@ namespace ElintriaEngine.UI.Panels
                         break;
                 }
             }
-            else if (Gizmos.ActiveTool == ElintriaEngine.Rendering.GizmoRenderer.TransformTool.Rotate)
+            else if (Gizmos.ActiveTool == GizmoRenderer.TransformTool.Rotate)
             {
                 float spd = 1.5f;
                 var rot = t.LocalEulerAngles;
@@ -498,8 +548,8 @@ namespace ElintriaEngine.UI.Panels
 
         private void HandleToolbarClick(PointF pos)
         {
-            if (_btnMove.Contains(pos)) { Gizmos.ActiveTool = ElintriaEngine.Rendering.GizmoRenderer.TransformTool.Move; return; }
-            if (_btnRotate.Contains(pos)) { Gizmos.ActiveTool = ElintriaEngine.Rendering.GizmoRenderer.TransformTool.Rotate; return; }
+            if (_btnMove.Contains(pos)) { Gizmos.ActiveTool = GizmoRenderer.TransformTool.Move; return; }
+            if (_btnRotate.Contains(pos)) { Gizmos.ActiveTool = GizmoRenderer.TransformTool.Rotate; return; }
             if (_btnGizmoAll.Contains(pos)) { Gizmos.ShowAll = !Gizmos.ShowAll; return; }
             if (!Gizmos.ShowAll) return;
             if (_btnCam.Contains(pos)) { Gizmos.ShowCameras = !Gizmos.ShowCameras; return; }
@@ -571,9 +621,9 @@ namespace ElintriaEngine.UI.Panels
             {
                 var cam = _sceneRenderer.Camera;
                 if (BindMatches(e, EditorAction.MoveTool))
-                    Gizmos.ActiveTool = ElintriaEngine.Rendering.GizmoRenderer.TransformTool.Move;
+                    Gizmos.ActiveTool = GizmoRenderer.TransformTool.Move;
                 if (BindMatches(e, EditorAction.RotateTool))
-                    Gizmos.ActiveTool = ElintriaEngine.Rendering.GizmoRenderer.TransformTool.Rotate;
+                    Gizmos.ActiveTool = GizmoRenderer.TransformTool.Rotate;
                 if (BindMatches(e, EditorAction.FrameSelected))
                 {
                     if (_sceneRenderer.Selected != null)

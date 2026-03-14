@@ -221,6 +221,8 @@ namespace ElintriaEngine.UI
             // Re-resolve scripts so hot-reloaded types work immediately
             Core.SceneRunner.LoadUserScripts(_projectRoot);
             Core.SceneRunner.ResolveEditorScripts(_scene);
+            // Re-load any model meshes the scene references (MeshName = full file path)
+            ReloadSceneModels();
             // Load companion UI document if it exists
             string uiPath = System.IO.Path.ChangeExtension(path, ".uidoc");
             if (System.IO.File.Exists(uiPath))
@@ -599,6 +601,55 @@ namespace ElintriaEngine.UI
                 }
             }
 
+            // ── Model (.obj / .fbx) drop onto SceneView or Hierarchy ──────────
+            if (Project.ActiveDrag != null
+                && Project.ActiveDrag.Type == AssetType.Model
+                && _scene != null)
+            {
+                bool onScene = SceneView.IsVisible && SceneView.ContainsPoint(pos);
+                bool onHier = Hierarchy.IsVisible && Hierarchy.ContainsPoint(pos);
+                if ((onScene || onHier))
+                {
+                    string modelPath = Project.ActiveDrag.FullPath;
+                    string meshKey = SceneView.Renderer.LoadModelFromFile(modelPath);
+
+                    if (meshKey != null)
+                    {
+                        string goName = System.IO.Path.GetFileNameWithoutExtension(modelPath);
+                        var go = new Core.GameObject(goName);
+
+                        // Place at mouse position in world space (scene view drop)
+                        // or at origin (hierarchy drop)
+                        if (onScene)
+                            go.Transform.LocalPosition = SceneView.GetWorldPositionAtMouse(pos);
+
+                        var mf = go.AddComponent<Core.MeshFilter>();
+                        mf.MeshName = meshKey;          // full path used as cache key
+                        go.AddComponent<Core.MeshRenderer>();
+
+                        _scene.AddGameObject(go);
+                        Hierarchy.SetScene(_scene);
+                        Hierarchy.ForceSelect(go);
+                        Inspector.Inspect(go);
+                        SceneView.SetSelected(go);
+
+                        // Remember the model path so the scene can re-load it on open
+                        Core.ProjectManager.SaveLastScene(_projectRoot, _scene.FilePath);
+
+                        Console.WriteLine($"[Editor] Model instantiated: {goName}");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"[Editor] Failed to load model: {Project.ActiveDrag.FullPath}");
+                    }
+
+                    SceneView.PrefabDropHighlight = false;
+                    Hierarchy.PrefabDropHighlight = false;
+                    foreach (var p in PanelZOrder()) p.OnMouseUp(e, pos);
+                    return;
+                }
+            }
+
             // ── Prefab drop onto SceneView or Hierarchy → instantiate ─────────
             if (Project.ActiveDrag != null
                 && Project.ActiveDrag.Type == AssetType.Prefab
@@ -704,10 +755,11 @@ namespace ElintriaEngine.UI
                 && Project.IsVisible
                 && Project.ContainsPoint(pos);
 
-            // Highlight SceneView/Hierarchy as prefab instantiation targets
+            // Highlight SceneView/Hierarchy as prefab or model instantiation targets
             bool draggingPrefab = Project.ActiveDrag?.Type == AssetType.Prefab;
-            SceneView.PrefabDropHighlight = draggingPrefab && SceneView.IsVisible && SceneView.ContainsPoint(pos);
-            Hierarchy.PrefabDropHighlight = draggingPrefab && Hierarchy.IsVisible && Hierarchy.ContainsPoint(pos);
+            bool draggingModel = Project.ActiveDrag?.Type == AssetType.Model;
+            SceneView.PrefabDropHighlight = (draggingPrefab || draggingModel) && SceneView.IsVisible && SceneView.ContainsPoint(pos);
+            Hierarchy.PrefabDropHighlight = (draggingPrefab || draggingModel) && Hierarchy.IsVisible && Hierarchy.ContainsPoint(pos);
 
             // Highlight inspector ref fields when dragging a prefab over them
             if (draggingPrefab && Inspector.IsVisible && Inspector.ContainsPoint(pos))
@@ -784,6 +836,92 @@ namespace ElintriaEngine.UI
             yield return Hierarchy;
             yield return Project;
             yield return SceneView;
+        }
+
+        /// <summary>
+        /// Called by EditorWindow.OnFileDrop — copies external files into the
+        /// project's Assets folder (organised by type) then refreshes the Project panel.
+        /// </summary>
+        public void ImportFiles(string[] filePaths)
+        {
+            if (filePaths == null || filePaths.Length == 0) return;
+
+            string assetsRoot = System.IO.Directory.Exists(
+                System.IO.Path.Combine(_projectRoot, "Assets"))
+                ? System.IO.Path.Combine(_projectRoot, "Assets")
+                : _projectRoot;
+
+            bool anyImported = false;
+
+            foreach (var src in filePaths)
+            {
+                if (!System.IO.File.Exists(src)) continue;
+
+                string ext = System.IO.Path.GetExtension(src).ToLowerInvariant();
+                string subDir = SubdirForExtension(ext);
+                string destDir = System.IO.Path.Combine(assetsRoot, subDir);
+                System.IO.Directory.CreateDirectory(destDir);
+
+                string fileName = System.IO.Path.GetFileName(src);
+                string dest = System.IO.Path.Combine(destDir, fileName);
+
+                // Unique name if already exists
+                int n = 1;
+                while (System.IO.File.Exists(dest))
+                {
+                    string name = System.IO.Path.GetFileNameWithoutExtension(fileName);
+                    dest = System.IO.Path.Combine(destDir, $"{name} ({n++}){ext}");
+                }
+
+                try
+                {
+                    System.IO.File.Copy(src, dest);
+                    Console.WriteLine($"[Editor] Imported: {System.IO.Path.GetFileName(dest)}  →  {subDir}/");
+                    anyImported = true;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Editor] Import failed '{src}': {ex.Message}");
+                }
+            }
+
+            if (anyImported)
+                Project.Refresh();
+        }
+
+        private static string SubdirForExtension(string ext) => ext switch
+        {
+            ".fbx" or ".obj" or ".dae" or ".gltf" or ".glb" => "Models",
+            ".png" or ".jpg" or ".jpeg" or ".bmp"
+            or ".tga" or ".hdr" or ".exr" => "Textures",
+            ".mp3" or ".wav" or ".ogg" or ".flac" => "Audio",
+            ".cs" => "Scripts",
+            ".scene" => "Scenes",
+            ".prefab" => "Prefabs",
+            ".mat" => "Materials",
+            ".shader" or ".glsl" or ".vert"
+            or ".frag" or ".geom" or ".comp" => "Shaders",
+            _ => "Misc",
+        };
+        private void ReloadSceneModels()
+        {
+            if (_scene == null) return;
+            foreach (var go in _scene.All())
+            {
+                var mf = go.GetComponent<Core.MeshFilter>();
+                if (mf == null) continue;
+                string name = mf.MeshName ?? "";
+                if (name.Length < 4) continue;
+                // If the MeshName looks like a file path and exists on disk, reload it
+                string ext = System.IO.Path.GetExtension(name).ToLowerInvariant();
+                if ((ext == ".obj" || ext == ".fbx" || ext == ".dae"
+                     || ext == ".gltf" || ext == ".glb")
+                    && System.IO.File.Exists(name)
+                    && !SceneView.Renderer.IsModelLoaded(name))
+                {
+                    SceneView.Renderer.LoadModelFromFile(name);
+                }
+            }
         }
 
         private void SaveScene()

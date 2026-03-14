@@ -22,6 +22,7 @@ namespace GameScripts
         {
             if(particleSystem != null)
                 Console.WriteLine("Particle system is assigned and ready to use!"   );
+        
         }
 
         // Called after all Updates — like Unity's LateUpdate()
