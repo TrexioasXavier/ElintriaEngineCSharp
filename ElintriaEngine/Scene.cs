@@ -272,6 +272,7 @@ namespace ElintriaEngine.Core
         public float SpotAngle = 30f;
     }
 
+    // ── Physics ────────────────────────────────────────────────────────────────
     public class Rigidbody : Component
     {
         public float Mass { get; set; } = 1f;
@@ -279,6 +280,22 @@ namespace ElintriaEngine.Core
         public bool IsKinematic { get; set; } = false;
         public float Drag { get; set; } = 0f;
         public float AngularDrag { get; set; } = 0.05f;
+    }
+
+    public class Rigidbody3D : Component
+    {
+        public float Mass { get; set; } = 1f;
+        public bool UseGravity { get; set; } = true;
+        public bool IsKinematic { get; set; } = false;
+        public float Drag { get; set; } = 0f;
+        public float AngularDrag { get; set; } = 0.05f;
+        public bool FreezePositionX { get; set; } = false;
+        public bool FreezePositionY { get; set; } = false;
+        public bool FreezePositionZ { get; set; } = false;
+        public bool FreezeRotationX { get; set; } = false;
+        public bool FreezeRotationY { get; set; } = false;
+        public bool FreezeRotationZ { get; set; } = false;
+        public string CollisionDetection { get; set; } = "Discrete"; // Discrete, Continuous
     }
 
     public class BoxCollider : Component
@@ -291,6 +308,36 @@ namespace ElintriaEngine.Core
     public class SphereCollider : Component
     {
         public Vector3 Center { get; set; } = Vector3.Zero;
+        public float Radius { get; set; } = 0.5f;
+        public bool IsTrigger { get; set; } = false;
+    }
+
+    public class CapsuleCollider : Component
+    {
+        public Vector3 Center { get; set; } = Vector3.Zero;
+        public float Radius { get; set; } = 0.5f;
+        public float Height { get; set; } = 2f;
+        public int Direction { get; set; } = 1;   // 0=X, 1=Y, 2=Z
+        public bool IsTrigger { get; set; } = false;
+    }
+
+    public class MeshCollider : Component
+    {
+        public bool IsTrigger { get; set; } = false;
+        public bool Convex { get; set; } = false;
+    }
+
+    public class BoxCollider2D : Component
+    {
+        public Vector3 Offset { get; set; } = Vector3.Zero;
+        public float Width { get; set; } = 1f;
+        public float Height { get; set; } = 1f;
+        public bool IsTrigger { get; set; } = false;
+    }
+
+    public class CircleCollider2D : Component
+    {
+        public Vector3 Offset { get; set; } = Vector3.Zero;
         public float Radius { get; set; } = 0.5f;
         public bool IsTrigger { get; set; } = false;
     }
@@ -366,9 +413,14 @@ namespace ElintriaEngine.Core
             { "MeshRenderer",    typeof(MeshRenderer)    },
             { "Camera",          typeof(Camera)          },
             { "Light",           typeof(Light)           },
-            { "Rigidbody",       typeof(Rigidbody)       },
-            { "BoxCollider",     typeof(BoxCollider)     },
-            { "SphereCollider",  typeof(SphereCollider)  },
+            { "Rigidbody",        typeof(Rigidbody)        },
+            { "Rigidbody3D",      typeof(Rigidbody3D)      },
+            { "BoxCollider",      typeof(BoxCollider)      },
+            { "SphereCollider",   typeof(SphereCollider)   },
+            { "CapsuleCollider",  typeof(CapsuleCollider)  },
+            { "MeshCollider",     typeof(MeshCollider)     },
+            { "BoxCollider2D",    typeof(BoxCollider2D)    },
+            { "CircleCollider2D", typeof(CircleCollider2D) },
             { "AudioSource",     typeof(AudioSource)     },
             { "AudioListener",   typeof(AudioListener)   },
             { "Canvas",          typeof(CanvasComponent) },

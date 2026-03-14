@@ -73,6 +73,12 @@ namespace ElintriaEngine.UI.Panels
         public abstract void OnRender(IEditorRenderer r);
         public virtual void OnUpdate(double dt) { }
 
+        /// <summary>
+        /// Override to return an active context menu that should be rendered
+        /// above the dock overlay (last layer). Return null if none is active.
+        /// </summary>
+        public virtual ContextMenu? GetActiveContextMenu() => null;
+
         // ── Rect helpers ──────────────────────────────────────────────────────
         public RectangleF HeaderRect => new(Bounds.X, Bounds.Y, Bounds.Width, HeaderH);
         public RectangleF ContentRect => new(Bounds.X, Bounds.Y + HeaderH,

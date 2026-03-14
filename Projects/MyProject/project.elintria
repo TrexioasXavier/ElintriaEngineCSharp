@@ -1,8 +1,8 @@
 {
   "Name": "MyProject",
   "Description": "",
-  "Type": "TwoD",
+  "Type": "ThreeD",
   "EngineVersion": "1.0.0",
-  "CreatedAt": "2026-03-13T01:38:58.512431Z",
-  "LastOpenedAt": "2026-03-13T06:54:37.532084Z"
+  "CreatedAt": "2026-03-14T15:15:19.8407312Z",
+  "LastOpenedAt": "2026-03-14T16:32:26.7740522Z"
 }

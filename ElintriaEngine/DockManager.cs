@@ -560,5 +560,32 @@ namespace ElintriaEngine.UI
 
         public IEnumerable<Panel> AllPanels() => _root.Panels();
         public bool IsDragging => _dragging != null && _dragStarted;
+
+        /// <summary>
+        /// Insert a panel into the dock tree next to an anchor panel.
+        /// zone: 0=left,1=right,2=top,3=bottom of anchor.
+        /// </summary>
+        public void AddPanel(Panel panel, Panel anchor, DockZone zone)
+        {
+            if (_root.TryInsertBeside(anchor, panel, zone, out var newRoot))
+                _root = newRoot;
+            else
+                // Fallback: split root horizontally
+                _root = new SplitNode(true, 0.5f, _root, new LeafNode(panel));
+            panel.Locked = false;
+            Relayout();
+        }
+
+        /// <summary>Remove a panel from the dock tree (e.g. when a floating panel is hidden).</summary>
+        public bool RemovePanel(Panel panel)
+        {
+            if (!_root.Contains(panel)) return false;
+            if (_root.TryRemove(panel, out var rep))
+                _root = rep ?? new LeafNode(panel); // keep something valid
+            Relayout();
+            return true;
+        }
+
+        public bool ContainsPanel(Panel panel) => _root.Contains(panel);
     }
 }

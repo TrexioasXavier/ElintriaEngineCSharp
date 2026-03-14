@@ -54,6 +54,7 @@ namespace ElintriaEngine.UI.Panels
         /// <summary>Non-null while the user is dragging a GO out of the hierarchy.</summary>
         public GameObject? ActiveDragGO => _isDragging ? _dragGO : null;
         public event Action<GameObject>? GODragStarted;
+        public override ContextMenu? GetActiveContextMenu() => _showCtx ? _ctxMenu : null;
         public bool IsHidden(GameObject go) => _hidden.Contains(go.InstanceId);
         public bool PrefabDropHighlight { get; set; }
 
@@ -99,7 +100,7 @@ namespace ElintriaEngine.UI.Panels
             }
 
             if (_showCtx && _ctxMenu != null)
-                _ctxMenu.OnRender(r);
+            { /* rendered above dock overlay by EditorLayout */ }
 
             if (PrefabDropHighlight)
             {

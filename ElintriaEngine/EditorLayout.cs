@@ -73,6 +73,9 @@ namespace ElintriaEngine.UI
             Hierarchy = new HierarchyPanel(new RectangleF(0, MenuH, HierW, cntH));
             Inspector = new InspectorPanel(new RectangleF(winW - InspW, MenuH, InspW, cntH));
             SceneView = new SceneViewPanel(new RectangleF(HierW, MenuH, midW, viewH));
+            Inspector.SceneView = SceneView;
+            Inspector.Scene = _scene;
+            Inspector.ProjectRoot = projectRoot;
             Project = new ProjectPanel(new RectangleF(HierW, MenuH + viewH, midW, ProjH));
 
             BuildSettings = new BuildSettingsPanel(
@@ -112,6 +115,7 @@ namespace ElintriaEngine.UI
             Inspector.Locked = false;
             SceneView.Locked = false;
             Project.Locked = false;
+            UIEditor.Locked = false;
 
             // ── Build the initial dock tree ───────────────────────────────────
             // Layout: [Hierarchy | [SceneView / Project] | Inspector]
@@ -204,6 +208,7 @@ namespace ElintriaEngine.UI
             Hierarchy.SetScene(_scene);
             SceneView.SetScene(_scene);
             BuildSettings.SetScene(_scene);
+            Inspector.Scene = _scene;
             Inspector.Inspect(null);
             // Re-resolve scripts so hot-reloaded types work immediately
             Core.SceneRunner.LoadUserScripts(_projectRoot);
@@ -233,9 +238,10 @@ namespace ElintriaEngine.UI
 
             Hierarchy.GODragStarted += go => { _goDragActive = go; };
 
-            MenuBar.NewScene += () => { _scene = new Core.Scene(); Hierarchy.SetScene(_scene); SceneView.SetScene(_scene); Inspector.Inspect(null); BuildSettings.SetScene(_scene); };
+            MenuBar.NewScene += () => { _scene = new Core.Scene(); Hierarchy.SetScene(_scene); SceneView.SetScene(_scene); Inspector.Inspect(null); Inspector.Scene = _scene; BuildSettings.SetScene(_scene); };
             MenuBar.SaveScene += SaveScene;
-            MenuBar.OpenScene += OpenScene;
+            MenuBar.SaveSceneAs += SaveSceneAs;
+            MenuBar.OpenScene += OpenSceneDialog;
             MenuBar.Exit += () => System.Environment.Exit(0);
             MenuBar.ReturnToLauncher += () => ReturnToLauncher?.Invoke();
             MenuBar.RegenerateScripts += ForceRegenerateScripts;
@@ -267,6 +273,16 @@ namespace ElintriaEngine.UI
                         break;
                     case "UIEditor":
                         UIEditor.IsVisible = !UIEditor.IsVisible;
+                        if (UIEditor.IsVisible)
+                        {
+                            // Dock it beside SceneView by default if not already in tree
+                            if (!_dock.ContainsPanel(UIEditor))
+                                _dock.AddPanel(UIEditor, SceneView, DockZone.Right);
+                        }
+                        else
+                        {
+                            _dock.RemovePanel(UIEditor);
+                        }
                         break;
                 }
                 OnResize(_winW, _winH);
@@ -427,9 +443,8 @@ namespace ElintriaEngine.UI
             }
 
             _runner.Tick(dt);
-            SceneView.OnUpdate(dt);              // fly-cam WASD movement
-            Preferences.OnUpdate(dt);            // rebind auto-cancel timer
-            Inspector.FlushGODrops();
+            SceneView.OnUpdate(dt);
+            Preferences.OnUpdate(dt);
         }
 
         // ── PHASE 1: 3D render — call BEFORE BeginFrame ────────────────────────
@@ -452,9 +467,9 @@ namespace ElintriaEngine.UI
             Hierarchy.OnRender(r);
             Inspector.OnRender(r);
             Project.OnRender(r);
+            if (UIEditor.IsVisible) UIEditor.OnRender(r);
 
             if (BuildSettings.IsVisible) BuildSettings.OnRender(r);
-            if (UIEditor.IsVisible) UIEditor.OnRender(r);
             if (Preferences.IsVisible) Preferences.OnRender(r);
             if (ProjectSettings.IsVisible) ProjectSettings.OnRender(r);
 
@@ -471,6 +486,15 @@ namespace ElintriaEngine.UI
                 r.DrawRect(g, Color.FromArgb(255, 80, 130, 255));
                 r.DrawText("GO: " + _goDragActive.Name, new PointF(g.X + 5, g.Y + 4), Color.FromArgb(255, 180, 210, 255), 10f);
             }
+            if (Inspector.ActiveDragComponent != null)
+            {
+                var comp = Inspector.ActiveDragComponent;
+                string lbl = $"{comp.GetType().Name}  ({comp.GameObject?.Name ?? "?"})";
+                var g = new RectangleF(_mouse.X + 12, _mouse.Y + 6, Math.Max(120f, lbl.Length * 6.2f + 10f), 18f);
+                r.FillRect(g, Color.FromArgb(220, 35, 55, 35));
+                r.DrawRect(g, Color.FromArgb(255, 90, 200, 100));
+                r.DrawText(lbl, new PointF(g.X + 5, g.Y + 4), Color.FromArgb(255, 160, 240, 165), 9f);
+            }
             if (Project.ActiveDrag != null)
             {
                 var g = new RectangleF(_mouse.X + 12, _mouse.Y + 6, 120f, 18f);
@@ -479,8 +503,21 @@ namespace ElintriaEngine.UI
                 r.DrawText(Project.ActiveDrag.Name, new PointF(g.X + 5, g.Y + 4), Color.White, 10f);
             }
 
-            // ── Dock overlay (dividers + drop zones) — drawn last, above everything ──
+            // ── Dock overlay (dividers + drop zones) ─────────────────────────
             _dock.DrawOverlay(r, _mouse);
+
+            // ── Context menus — rendered last so they always appear on top ────
+            // Collect from all dockable panels plus floating ones
+            var allPanelsForCtx = new Panel[]
+                { Hierarchy, Project, Inspector, SceneView, UIEditor };
+            foreach (var p in allPanelsForCtx)
+            {
+                var ctx = p.GetActiveContextMenu();
+                if (ctx != null) ctx.OnRender(r);
+            }
+
+            // Ref-field picker popup — floats above everything
+            Inspector.DrawRefPickerIfOpen(r);
 
             // Scene picker popup
             if (_showScenePicker)
@@ -561,11 +598,16 @@ namespace ElintriaEngine.UI
             }
 
             // ── GO drop onto inspector object-ref field ────────────────────────
+            bool droppedOnInspector = false;
             if (_goDragActive != null && Inspector.IsVisible && Inspector.ContainsPoint(pos))
             {
                 string? fid = Inspector.GetObjectRefFieldAt(pos);
                 if (fid != null)
+                {
                     Inspector.AcceptGODrop(fid, _goDragActive);
+                    Inspector.FlushGODrops();   // apply immediately — before panels' OnMouseUp fires
+                    droppedOnInspector = true;  // suppress hierarchy SelectionChanged below
+                }
             }
 
             // ── GO drop onto Project panel → create prefab ────────────────────
@@ -602,7 +644,14 @@ namespace ElintriaEngine.UI
 
             if (Preferences.IsVisible) Preferences.OnMouseUp(e, pos);
             if (ProjectSettings.IsVisible) ProjectSettings.OnMouseUp(e, pos);
-            foreach (var p in PanelZOrder()) p.OnMouseUp(e, pos);
+            foreach (var p in PanelZOrder())
+            {
+                // If we already flushed a GO drop onto the inspector, skip the hierarchy's
+                // OnMouseUp — otherwise it fires SelectionChanged(droppedGO) and switches
+                // the inspector away from the target GO.
+                if (droppedOnInspector && p == Hierarchy) continue;
+                p.OnMouseUp(e, pos);
+            }
         }
 
         public void OnMouseMove(PointF pos)
@@ -748,6 +797,42 @@ namespace ElintriaEngine.UI
 
             _showScenePicker = true;
             _scenePickerHover = -1;
+        }
+
+        private void SaveSceneAs()
+        {
+            string initDir = string.IsNullOrEmpty(_scene.FilePath)
+                ? System.IO.Path.Combine(_projectRoot, "Assets", "Scenes")
+                : System.IO.Path.GetDirectoryName(_scene.FilePath)!;
+            string defName = string.IsNullOrEmpty(_scene.FilePath)
+                ? _scene.Name + ".scene"
+                : System.IO.Path.GetFileName(_scene.FilePath);
+
+            string? path = Core.NativeDialog.SaveFile(
+                "Save Scene As",
+                "Scene files (*.scene)|*.scene|All files (*.*)|*.*",
+                defName,
+                initDir);
+
+            if (string.IsNullOrEmpty(path)) return;
+            if (!path.EndsWith(".scene", StringComparison.OrdinalIgnoreCase))
+                path += ".scene";
+
+            _scene.FilePath = path;
+            _scene.Name = System.IO.Path.GetFileNameWithoutExtension(path);
+            SaveScene();
+        }
+
+        private void OpenSceneDialog()
+        {
+            string initDir = System.IO.Path.Combine(_projectRoot, "Assets", "Scenes");
+            string? path = Core.NativeDialog.OpenFile(
+                "Open Scene",
+                "Scene files (*.scene)|*.scene|All files (*.*)|*.*",
+                System.IO.Directory.Exists(initDir) ? initDir : _projectRoot);
+
+            if (!string.IsNullOrEmpty(path) && System.IO.File.Exists(path))
+                LoadSceneFromFile(path);
         }
 
         // ── Scene picker overlay ───────────────────────────────────────────────

@@ -180,6 +180,12 @@ namespace ElintriaEngine.Core
             foreach (var comp in allComponents)
                 SafeCall(comp, "OnStart", c => c.OnStart());
 
+            // Auto-play ParticleSystem components that have PlayOnAwake set
+            foreach (var go in _scene.All())
+                foreach (var comp in go.Components)
+                    if (comp is ParticleSystem ps && ps.PlayOnAwake && ps.Enabled)
+                        ps.Play();
+
             Started?.Invoke();
         }
 

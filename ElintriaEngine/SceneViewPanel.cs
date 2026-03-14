@@ -49,7 +49,7 @@ namespace ElintriaEngine.UI.Panels
         public bool PrefabDropHighlight { get; set; }
         public Core.UIDocument? UIDocument { get; set; }
 
-        private GizmoRenderer Gizmos => _sceneRenderer.Gizmos;
+        private ElintriaEngine.Rendering.GizmoRenderer Gizmos => _sceneRenderer.Gizmos;
 
         // ── Navigation state ───────────────────────────────────────────────────
         private bool _rightHeld;
@@ -62,6 +62,11 @@ namespace ElintriaEngine.UI.Panels
         private int _handleAxis = -1;
         private Vector3 _dragCamRight;
         private Vector3 _dragCamForward;
+
+        // ── Collider edit drag ─────────────────────────────────────────────────
+        private bool _colliderDragging;
+        private int _colliderDragAxis = -1;
+        private const float ColliderHandleRadius = 10f; // px hit radius
 
         // ── Toolbar rects ──────────────────────────────────────────────────────
         private const float ToolbarH = 24f;
@@ -89,6 +94,8 @@ namespace ElintriaEngine.UI.Panels
 
         public void SetScene(Core.Scene? s) => _scene = s;
         public void SetSelected(GameObject? go) => _sceneRenderer.Selected = go;
+        public bool ColliderEditMode => Gizmos.ColliderEditMode;
+        public void SetColliderEditMode(bool on) { Gizmos.ColliderEditMode = on; _colliderDragging = false; }
         public void Init() => _sceneRenderer.Init();
         public SceneRenderer Renderer => _sceneRenderer;
 
@@ -200,8 +207,8 @@ namespace ElintriaEngine.UI.Panels
             float x = _toolbarRect.X + 4f, y = _toolbarRect.Y + 2f, h = ToolbarH - 4f;
             _btnMove = new RectangleF(x, y, 46f, h); x += 50f;
             _btnRotate = new RectangleF(x, y, 46f, h); x += 54f;
-            DrawToolBtn(r, _btnMove, "Move", Gizmos.ActiveTool == GizmoRenderer.TransformTool.Move);
-            DrawToolBtn(r, _btnRotate, "Rotate", Gizmos.ActiveTool == GizmoRenderer.TransformTool.Rotate);
+            DrawToolBtn(r, _btnMove, "Move", Gizmos.ActiveTool == ElintriaEngine.Rendering.GizmoRenderer.TransformTool.Move);
+            DrawToolBtn(r, _btnRotate, "Rotate", Gizmos.ActiveTool == ElintriaEngine.Rendering.GizmoRenderer.TransformTool.Rotate);
             r.DrawLine(new PointF(x + 1f, y + 2f), new PointF(x + 1f, y + h - 2f), Color.FromArgb(255, 55, 55, 60));
             x += 6f;
             _btnGizmoAll = new RectangleF(x, y, 52f, h); x += 56f;
@@ -246,7 +253,7 @@ namespace ElintriaEngine.UI.Panels
             string nav = _rightHeld
                 ? "RMB: look  WASD=fly  Q/E=down/up"
                 : (_sceneRenderer.Selected != null
-                    ? (Gizmos.ActiveTool == GizmoRenderer.TransformTool.Move
+                    ? (Gizmos.ActiveTool == ElintriaEngine.Rendering.GizmoRenderer.TransformTool.Move
                         ? "W=Move  E=Rotate  drag arrows to move"
                         : "W=Move  E=Rotate  drag rings to rotate")
                     : "RMB+drag=look  hold RMB+WASD=fly  MMB=pan  scroll=zoom");
@@ -267,7 +274,7 @@ namespace ElintriaEngine.UI.Panels
                 bool hasAu = Gizmos.ShowAudio && go.GetComponent<Core.AudioSource>() != null;
                 string? icon = hasCam ? "[Cam]" : hasDL ? "[Sun]" : hasSL ? "[Spot]" : hasAu ? "[Audio]" : null;
                 if (icon == null) continue;
-                var scr = GizmoRenderer.WorldToScreen(go.Transform.LocalPosition, view, proj, vp);
+                var scr = ElintriaEngine.Rendering.GizmoRenderer.WorldToScreen(go.Transform.LocalPosition, view, proj, vp);
                 if (scr.X < vp.X || scr.X > vp.Right || scr.Y < vp.Y || scr.Y > vp.Bottom) continue;
                 r.DrawText(icon, new PointF(scr.X + 8f, scr.Y - 6f), Color.FromArgb(220, 255, 230, 100), 9f);
             }
@@ -346,6 +353,10 @@ namespace ElintriaEngine.UI.Panels
             if (_activeTab == ViewTab.Scene && _handleDragging && Gizmos.HandleTarget != null)
             { ApplyHandleDrag(dx, dy); return; }
 
+            // Collider edit drag — Scene tab only
+            if (_activeTab == ViewTab.Scene && _colliderDragging && Gizmos.HandleTarget != null)
+            { ApplyColliderDrag(dx, dy); return; }
+
             var cam = _sceneRenderer.Camera;
 
             if (_rightHeld)
@@ -369,7 +380,7 @@ namespace ElintriaEngine.UI.Panels
             var go = Gizmos.HandleTarget!;
             var t = go.Transform;
 
-            if (Gizmos.ActiveTool == GizmoRenderer.TransformTool.Move)
+            if (Gizmos.ActiveTool == ElintriaEngine.Rendering.GizmoRenderer.TransformTool.Move)
             {
                 float speed = _sceneRenderer.Camera.Distance * 0.006f;
                 var pos = t.LocalPosition;
@@ -393,7 +404,7 @@ namespace ElintriaEngine.UI.Panels
                         break;
                 }
             }
-            else if (Gizmos.ActiveTool == GizmoRenderer.TransformTool.Rotate)
+            else if (Gizmos.ActiveTool == ElintriaEngine.Rendering.GizmoRenderer.TransformTool.Rotate)
             {
                 float spd = 1.5f;
                 var rot = t.LocalEulerAngles;
@@ -406,6 +417,56 @@ namespace ElintriaEngine.UI.Panels
                         t.LocalEulerAngles = new Vector3(rot.X + dy * spd, rot.Y + dx * spd, rot.Z);
                         break;
                 }
+            }
+        }
+
+        private bool TryStartColliderDrag(PointF pos)
+        {
+            foreach (var h in Gizmos.ColliderHandles)
+            {
+                float dx = pos.X - h.ScreenPos.X;
+                float dy = pos.Y - h.ScreenPos.Y;
+                if (dx * dx + dy * dy < ColliderHandleRadius * ColliderHandleRadius)
+                {
+                    _colliderDragging = true;
+                    _colliderDragAxis = h.Axis;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private void ApplyColliderDrag(float dx, float dy)
+        {
+            var go = Gizmos.HandleTarget!;
+            float spd = _sceneRenderer.Camera.Distance * 0.005f;
+            // Map screen delta → signed world delta along the face axis
+            // Axis 0=+X,1=-X,2=+Y,3=-Y,4=+Z,5=-Z  / sphere 0..5=±radius / capsule 0=radius,2=+H,3=-H
+            float delta = (MathF.Abs(dx) > MathF.Abs(dy)) ? dx * spd : -dy * spd;
+            // For negative-direction faces, pushing handle outward increases size
+            bool neg = (_colliderDragAxis & 1) == 1;
+            float d = neg ? -delta : delta;
+
+            if (go.GetComponent<BoxCollider>() is BoxCollider bc)
+            {
+                var sz = bc.Size;
+                switch (_colliderDragAxis)
+                {
+                    case 0: case 1: bc.Size = new Vector3(Math.Max(0.01f, sz.X + d * 2), sz.Y, sz.Z); break;
+                    case 2: case 3: bc.Size = new Vector3(sz.X, Math.Max(0.01f, sz.Y + d * 2), sz.Z); break;
+                    case 4: case 5: bc.Size = new Vector3(sz.X, sz.Y, Math.Max(0.01f, sz.Z + d * 2)); break;
+                }
+            }
+            else if (go.GetComponent<SphereCollider>() is SphereCollider sc)
+            {
+                sc.Radius = Math.Max(0.01f, sc.Radius + d);
+            }
+            else if (go.GetComponent<CapsuleCollider>() is CapsuleCollider cap)
+            {
+                if (_colliderDragAxis == 0)
+                    cap.Radius = Math.Max(0.01f, cap.Radius + d);
+                else
+                    cap.Height = Math.Max(cap.Radius * 2 + 0.01f, cap.Height + d * 2);
             }
         }
 
@@ -425,7 +486,10 @@ namespace ElintriaEngine.UI.Panels
                 IsFocused = true;
                 _lastMouse = pos;
                 if (e.Button == MouseButton.Left && _activeTab == ViewTab.Scene)
-                    TryStartHandleDrag(pos);
+                {
+                    if (Gizmos.ColliderEditMode && TryStartColliderDrag(pos)) { /* handled */ }
+                    else TryStartHandleDrag(pos);
+                }
                 else if (e.Button == MouseButton.Right) _rightHeld = true;
                 else if (e.Button == MouseButton.Middle) _panning = true;
             }
@@ -434,8 +498,8 @@ namespace ElintriaEngine.UI.Panels
 
         private void HandleToolbarClick(PointF pos)
         {
-            if (_btnMove.Contains(pos)) { Gizmos.ActiveTool = GizmoRenderer.TransformTool.Move; return; }
-            if (_btnRotate.Contains(pos)) { Gizmos.ActiveTool = GizmoRenderer.TransformTool.Rotate; return; }
+            if (_btnMove.Contains(pos)) { Gizmos.ActiveTool = ElintriaEngine.Rendering.GizmoRenderer.TransformTool.Move; return; }
+            if (_btnRotate.Contains(pos)) { Gizmos.ActiveTool = ElintriaEngine.Rendering.GizmoRenderer.TransformTool.Rotate; return; }
             if (_btnGizmoAll.Contains(pos)) { Gizmos.ShowAll = !Gizmos.ShowAll; return; }
             if (!Gizmos.ShowAll) return;
             if (_btnCam.Contains(pos)) { Gizmos.ShowCameras = !Gizmos.ShowCameras; return; }
@@ -472,7 +536,7 @@ namespace ElintriaEngine.UI.Panels
 
         public override void OnMouseUp(MouseButtonEventArgs e, PointF pos)
         {
-            if (e.Button == MouseButton.Left) _handleDragging = false;
+            if (e.Button == MouseButton.Left) { _handleDragging = false; _colliderDragging = false; _colliderDragAxis = -1; }
             if (e.Button == MouseButton.Right) { _rightHeld = false; ClearFlyKeys(); }
             if (e.Button == MouseButton.Middle) _panning = false;
             base.OnMouseUp(e, pos);
@@ -507,9 +571,9 @@ namespace ElintriaEngine.UI.Panels
             {
                 var cam = _sceneRenderer.Camera;
                 if (BindMatches(e, EditorAction.MoveTool))
-                    Gizmos.ActiveTool = GizmoRenderer.TransformTool.Move;
+                    Gizmos.ActiveTool = ElintriaEngine.Rendering.GizmoRenderer.TransformTool.Move;
                 if (BindMatches(e, EditorAction.RotateTool))
-                    Gizmos.ActiveTool = GizmoRenderer.TransformTool.Rotate;
+                    Gizmos.ActiveTool = ElintriaEngine.Rendering.GizmoRenderer.TransformTool.Rotate;
                 if (BindMatches(e, EditorAction.FrameSelected))
                 {
                     if (_sceneRenderer.Selected != null)

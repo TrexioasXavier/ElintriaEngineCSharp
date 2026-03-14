@@ -5,7 +5,7 @@ using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using ElintriaEngine.Core;
 
-namespace ElintriaEngine.Rendering.Scene
+namespace ElintriaEngine.Rendering
 {
     /// <summary>
     /// Draws scene-space gizmo overlays and transform handles via raw GL lines.
@@ -28,6 +28,15 @@ namespace ElintriaEngine.Rendering.Scene
         public TransformTool ActiveTool { get; set; } = TransformTool.Move;
         public GameObject? HandleTarget { get; set; }
 
+        // ── Collider edit mode ─────────────────────────────────────────────────
+        /// <summary>When true, face-drag handles are drawn instead of transform handles.</summary>
+        public bool ColliderEditMode { get; set; } = false;
+
+        // Collider handle: each face of a box/sphere/capsule gets a dot handle.
+        // Axis: 0=+X 1=-X 2=+Y 3=-Y 4=+Z 5=-Z  (for sphere/capsule: 0=+R)
+        public struct ColliderHandle { public Vector2 ScreenPos; public int Axis; }
+        public readonly List<ColliderHandle> ColliderHandles = new();
+
         // ── Axis handles (screen-space tips, rebuilt each Render call) ─────────
         public struct AxisHandle { public Vector2 ScreenTip; public int Axis; public float ShaftLength; }
         public readonly List<AxisHandle> LastHandles = new();
@@ -36,7 +45,7 @@ namespace ElintriaEngine.Rendering.Scene
         // (SceneViewPanel reads LastHandles and drives drag itself)
 
         // ── GL state ──────────────────────────────────────────────────────────
-        private SceneShader? _shader;
+        private ElintriaEngine.Rendering.Scene.SceneShader? _shader;
         private int _vao, _vbo;
         private bool _ready;
 
@@ -48,6 +57,7 @@ namespace ElintriaEngine.Rendering.Scene
         private static readonly Vector4 CDL = new(1.00f, 0.95f, 0.50f, 1f);  // directional sun
         private static readonly Vector4 CSL = new(1.00f, 0.65f, 0.20f, 1f);  // spotlight orange
         private static readonly Vector4 CCo = new(0.25f, 0.85f, 0.85f, 1f);  // collider cyan
+        private static readonly Vector4 CCoEdit = new(0.30f, 1.00f, 0.40f, 1f); // collider edit green
         private static readonly Vector4 CAu = new(0.55f, 0.55f, 1.00f, 1f);  // audio purple
 
         // ── Init ──────────────────────────────────────────────────────────────
@@ -62,7 +72,7 @@ void main(){ gl_Position = uVP * vec4(aPos,1.0); }";
 uniform vec4 uColor;
 out vec4 FragColor;
 void main(){ FragColor = uColor; }";
-            _shader = SceneShader.Compile(vert, frag);
+            _shader = ElintriaEngine.Rendering.Scene.SceneShader.Compile(vert, frag);
 
             _vao = GL.GenVertexArray();
             _vbo = GL.GenBuffer();
@@ -108,21 +118,50 @@ void main(){ FragColor = uColor; }";
 
                 if (ShowColliders)
                 {
-                    if (go.GetComponent<BoxCollider>() is BoxCollider bc)
-                        DrawBoxWire(vpMat, go, bc.Center, bc.Size, CCo);
+                    var col = go.GetComponentByType(typeof(BoxCollider));
+                    if (col is BoxCollider bc)
+                    {
+                        var tint = (ColliderEditMode && HandleTarget == go) ? CCoEdit : CCo;
+                        DrawBoxWire(vpMat, go, bc.Center, bc.Size, tint);
+                    }
                     if (go.GetComponent<SphereCollider>() is SphereCollider sc)
-                        DrawCircleRing(vpMat, go.Transform.LocalPosition + sc.Center,
-                                       sc.Radius, CCo);
+                    {
+                        var tint = (ColliderEditMode && HandleTarget == go) ? CCoEdit : CCo;
+                        var wc = go.Transform.LocalPosition + sc.Center;
+                        DrawCircleRing(vpMat, wc, sc.Radius, tint);
+                        DrawCircleRingAxis(vpMat, wc, sc.Radius, tint, 0); // XZ already done
+                        DrawCircleRingAxis(vpMat, wc, sc.Radius, tint, 2); // XY ring
+                    }
+                    if (go.GetComponent<CapsuleCollider>() is CapsuleCollider cap)
+                    {
+                        var tint = (ColliderEditMode && HandleTarget == go) ? CCoEdit : CCo;
+                        DrawCapsuleWire(vpMat, go, cap, tint);
+                    }
+                    if (go.GetComponent<BoxCollider2D>() is BoxCollider2D bc2)
+                    {
+                        var s = new Vector3(bc2.Width, bc2.Height, 0.02f);
+                        DrawBoxWire(vpMat, go, bc2.Offset, s, CCo);
+                    }
+                    if (go.GetComponent<CircleCollider2D>() is CircleCollider2D cc2)
+                        DrawCircleRing(vpMat, go.Transform.LocalPosition + cc2.Offset, cc2.Radius, CCo);
+                    if (go.GetComponent<MeshCollider>() is MeshCollider mc)
+                    {
+                        // Draw a simple bounding indicator for mesh colliders
+                        DrawBoxWire(vpMat, go, Vector3.Zero, Vector3.One, Color4TintedCCo(mc.IsTrigger));
+                    }
                 }
 
                 if (ShowAudio && go.GetComponent<AudioSource>() != null)
                     DrawCrossIcon(vpMat, go.Transform.LocalPosition, CAu, camPos);
             }
 
-            // Transform handles
+            // Transform handles OR collider edit handles
+            ColliderHandles.Clear();
             if (ShowTransforms && HandleTarget != null)
             {
-                if (ActiveTool == TransformTool.Move)
+                if (ColliderEditMode)
+                    DrawColliderEditHandles(vpMat, view, proj, HandleTarget, viewport);
+                else if (ActiveTool == TransformTool.Move)
                     DrawMoveHandles(vpMat, view, proj, camPos, viewport);
                 else if (ActiveTool == TransformTool.Rotate)
                     DrawRotateHandles(vpMat, view, proj, camPos, viewport);
@@ -287,6 +326,128 @@ void main(){ FragColor = uColor; }";
             for (int i = 0; i < n; i++)
                 Lines(vpMat, color, 1f, pts[i], pts[(i + 1) % n]);
         }
+
+        // ── Circle ring on a specific plane ───────────────────────────────────
+        private void DrawCircleRingAxis(Matrix4 vpMat, Vector3 center, float radius,
+                                         Vector4 color, int axis)
+        {
+            // axis 0=XZ(default already done), 1=YZ, 2=XY
+            int n = 20;
+            var pts = new Vector3[n];
+            for (int i = 0; i < n; i++)
+            {
+                float a = i * MathF.PI * 2f / n;
+                pts[i] = axis == 2
+                    ? center + new Vector3(MathF.Cos(a) * radius, MathF.Sin(a) * radius, 0)
+                    : center + new Vector3(0, MathF.Cos(a) * radius, MathF.Sin(a) * radius);
+            }
+            for (int i = 0; i < n; i++)
+                Lines(vpMat, color, 1f, pts[i], pts[(i + 1) % n]);
+        }
+
+        // ── Capsule wireframe ─────────────────────────────────────────────────
+        private void DrawCapsuleWire(Matrix4 vpMat, GameObject go,
+                                      CapsuleCollider cap, Vector4 color)
+        {
+            var pos = go.Transform.LocalPosition + cap.Center;
+            float r = cap.Radius, h = cap.Height * 0.5f - r;
+            h = Math.Max(h, 0);
+            // Draw two end rings and four lines
+            DrawCircleRing(vpMat, pos + Vector3.UnitY * h, r, color);
+            DrawCircleRing(vpMat, pos - Vector3.UnitY * h, r, color);
+            // Vertical lines
+            Lines(vpMat, color, 1f,
+                pos + new Vector3(r, h, 0), pos + new Vector3(r, -h, 0),
+                pos + new Vector3(-r, h, 0), pos + new Vector3(-r, -h, 0),
+                pos + new Vector3(0, h, r), pos + new Vector3(0, -h, r),
+                pos + new Vector3(0, h, -r), pos + new Vector3(0, -h, -r));
+        }
+
+        // ── Collider face-drag edit handles ───────────────────────────────────
+        private void DrawColliderEditHandles(Matrix4 vpMat, Matrix4 view, Matrix4 proj,
+                                              GameObject go, RectangleF viewport)
+        {
+            ColliderHandles.Clear();
+
+            if (go.GetComponent<BoxCollider>() is BoxCollider bc)
+            {
+                var c = go.Transform.LocalPosition + bc.Center;
+                var h = bc.Size * 0.5f;
+                var faces = new (Vector3 pos, int axis)[]
+                {
+                    (c + Vector3.UnitX * h.X,  0), (c - Vector3.UnitX * h.X, 1),
+                    (c + Vector3.UnitY * h.Y,  2), (c - Vector3.UnitY * h.Y, 3),
+                    (c + Vector3.UnitZ * h.Z,  4), (c - Vector3.UnitZ * h.Z, 5),
+                };
+                foreach (var (fp, ax) in faces)
+                {
+                    Lines(vpMat, CCoEdit, 2f, c, fp);
+                    var sp = WorldToScreen(fp, vpMat, proj, viewport);
+                    ColliderHandles.Add(new ColliderHandle { ScreenPos = sp, Axis = ax });
+                    DrawDotHandle(vpMat, fp, CCoEdit, viewport);
+                }
+                DrawBoxWire(vpMat, go, bc.Center, bc.Size, CCoEdit);
+            }
+            else if (go.GetComponent<SphereCollider>() is SphereCollider sc)
+            {
+                var c = go.Transform.LocalPosition + sc.Center;
+                var axes = new (Vector3 dir, int ax)[]
+                {
+                    (Vector3.UnitX, 0), (-Vector3.UnitX, 1),
+                    (Vector3.UnitY, 2), (-Vector3.UnitY, 3),
+                    (Vector3.UnitZ, 4), (-Vector3.UnitZ, 5),
+                };
+                foreach (var (dir, ax) in axes)
+                {
+                    var fp = c + dir * sc.Radius;
+                    Lines(vpMat, CCoEdit, 1f, c, fp);
+                    ColliderHandles.Add(new ColliderHandle
+                    {
+                        ScreenPos = WorldToScreen(fp, vpMat, proj, viewport),
+                        Axis = ax
+                    });
+                    DrawDotHandle(vpMat, fp, CCoEdit, viewport);
+                }
+                DrawCircleRing(vpMat, c, sc.Radius, CCoEdit);
+                DrawCircleRingAxis(vpMat, c, sc.Radius, CCoEdit, 2);
+            }
+            else if (go.GetComponent<CapsuleCollider>() is CapsuleCollider cap)
+            {
+                var c = go.Transform.LocalPosition + cap.Center;
+                float h = cap.Height * 0.5f;
+                // Radius handle on +X, Height handles on +Y/-Y
+                var handles = new (Vector3 p, int ax)[]
+                {
+                    (c + Vector3.UnitX  * cap.Radius, 0),
+                    (c + Vector3.UnitY  * h,          2),
+                    (c - Vector3.UnitY  * h,          3),
+                };
+                foreach (var (fp, ax) in handles)
+                {
+                    Lines(vpMat, CCoEdit, 1f, c, fp);
+                    ColliderHandles.Add(new ColliderHandle
+                    {
+                        ScreenPos = WorldToScreen(fp, vpMat, proj, viewport),
+                        Axis = ax
+                    });
+                    DrawDotHandle(vpMat, fp, CCoEdit, viewport);
+                }
+                DrawCapsuleWire(vpMat, go, cap, CCoEdit);
+            }
+        }
+
+        private void DrawDotHandle(Matrix4 vpMat, Vector3 worldPos,
+                                    Vector4 color, RectangleF viewport)
+        {
+            float s = 0.06f;
+            Lines(vpMat, color, 3f,
+                worldPos - Vector3.UnitX * s, worldPos + Vector3.UnitX * s,
+                worldPos - Vector3.UnitY * s, worldPos + Vector3.UnitY * s,
+                worldPos - Vector3.UnitZ * s, worldPos + Vector3.UnitZ * s);
+        }
+
+        private static Vector4 Color4TintedCCo(bool trigger) =>
+            trigger ? new Vector4(0.8f, 0.4f, 0.1f, 1f) : new Vector4(0.25f, 0.85f, 0.85f, 1f);
 
         // ── Small cross icon at a world position ──────────────────────────────
         private void DrawCrossIcon(Matrix4 vpMat, Vector3 pos, Vector4 color, Vector3 camPos)

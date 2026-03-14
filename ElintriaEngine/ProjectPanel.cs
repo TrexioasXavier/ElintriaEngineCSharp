@@ -42,6 +42,7 @@ namespace ElintriaEngine.UI.Panels
 
         public string CurrentPath => _curPath;
         public (int W, int H) ScreenSize { get; set; } = (1920, 1080);
+        public override ContextMenu? GetActiveContextMenu() => _showCtx ? _ctxMenu : null;
 
         public FileItem? ActiveDrag { get; private set; }
         private FileItem? _dragItem;
@@ -227,9 +228,7 @@ namespace ElintriaEngine.UI.Panels
 
             // Scrollbar (outside clip)
             DrawScrollBarManual(r, cr);
-
-            if (_showCtx && _ctxMenu != null)
-                _ctxMenu.OnRender(r);
+            // context menu rendered above dock overlay by EditorLayout
         }
 
         private void DrawScrollBarManual(IEditorRenderer r, RectangleF cr)

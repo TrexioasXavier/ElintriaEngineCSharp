@@ -304,7 +304,21 @@ namespace ElintriaEngine.UI.Panels
             r.FillRect(designRect, CDesign);
             r.DrawRect(designRect, Color.FromArgb(255, 65, 65, 72));
 
-            if (_showGrid) DrawGrid(r, designRect);
+            // Grid — clipped to the canvas area so lines never bleed outside on zoom
+            if (_showGrid)
+            {
+                // Intersect designRect with _canvasRect so grid stays inside the panel
+                float gx = Math.Max(designRect.X, _canvasRect.X);
+                float gy = Math.Max(designRect.Y, _canvasRect.Y);
+                float gr = Math.Min(designRect.Right, _canvasRect.Right);
+                float gb = Math.Min(designRect.Bottom, _canvasRect.Bottom);
+                if (gr > gx && gb > gy)
+                {
+                    r.PushClip(new RectangleF(gx, gy, gr - gx, gb - gy));
+                    DrawGrid(r, designRect);
+                    r.PopClip();
+                }
+            }
 
             // Elements
             r.PushClip(designRect);

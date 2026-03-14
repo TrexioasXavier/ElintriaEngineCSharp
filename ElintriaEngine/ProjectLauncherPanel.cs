@@ -409,8 +409,29 @@ namespace ElintriaEngine.UI
             y += 14f;
 
             string curDir = ProjectManager.DefaultProjectsDirectory;
-            DrawField(r, "s_dir", x0, y, fw - 120f, curDir,
+            DrawField(r, "s_dir", x0, y, fw - 170f, curDir,
                 v => { ProjectManager.DefaultProjectsDirectory = v; _newPath = v; _settings = ProjectManager.LoadSettings(); });
+
+            // Browse button — opens native folder picker
+            var browseBtn2 = new RectangleF(x0 + fw - 166f, y, 46f, 26f);
+            bool bb2h = browseBtn2.Contains(_mouse);
+            r.FillRect(browseBtn2, bb2h ? Lighten(CCard) : CCard);
+            r.DrawRect(browseBtn2, CBorder);
+            r.DrawText("Browse", new PointF(browseBtn2.X + 4f, browseBtn2.Y + 6f), CText, 9f);
+            _hitRects["s_browse"] = (browseBtn2, () =>
+            {
+                string? chosen = Core.NativeDialog.SelectFolder(
+                    "Choose Default Projects Folder",
+                    ProjectManager.DefaultProjectsDirectory);
+                if (!string.IsNullOrEmpty(chosen))
+                {
+                    ProjectManager.DefaultProjectsDirectory = chosen;
+                    _newPath = chosen;
+                    _settings = ProjectManager.LoadSettings();
+                    Refresh();
+                }
+            }
+            );
 
             var setBtn = new RectangleF(x0 + fw - 116f, y, 56f, 26f);
             bool sbh = setBtn.Contains(_mouse);
@@ -690,8 +711,20 @@ namespace ElintriaEngine.UI
 
         private void BrowseFolder()
         {
-            string name = string.IsNullOrWhiteSpace(_newName) ? "NewProject" : _newName;
-            _newPath = Path.Combine(ProjectManager.DefaultProjectsDirectory, name);
+            string? chosen = Core.NativeDialog.SelectFolder(
+                "Choose Project Location",
+                ProjectManager.DefaultProjectsDirectory);
+            if (!string.IsNullOrEmpty(chosen))
+            {
+                string name = string.IsNullOrWhiteSpace(_newName) ? "NewProject" : _newName;
+                _newPath = Path.Combine(chosen, name);
+            }
+            else
+            {
+                // Fallback: use default dir + name
+                string name = string.IsNullOrWhiteSpace(_newName) ? "NewProject" : _newName;
+                _newPath = Path.Combine(ProjectManager.DefaultProjectsDirectory, name);
+            }
         }
 
         // ── Edit helpers ──────────────────────────────────────────────────────
