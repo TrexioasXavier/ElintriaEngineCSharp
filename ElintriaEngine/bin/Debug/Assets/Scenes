@@ -1,0 +1,214 @@
+{
+  "Name": "Untitled",
+  "Version": 1,
+  "GameObjects": [
+    {
+      "InstanceId": 1,
+      "Name": "Sphere",
+      "ActiveSelf": true,
+      "Tag": "Untagged",
+      "Layer": "Default",
+      "Position": [
+        0,
+        0,
+        0
+      ],
+      "Rotation": [
+        0,
+        0,
+        0
+      ],
+      "Scale": [
+        1,
+        1,
+        1
+      ],
+      "Components": [
+        {
+          "TypeName": "MeshFilter",
+          "Enabled": true,
+          "Properties": {
+            "MeshPath": "",
+            "MeshName": "Sphere"
+          }
+        },
+        {
+          "TypeName": "MeshRenderer",
+          "Enabled": true,
+          "Properties": {
+            "MaterialPath": "",
+            "CastShadows": true,
+            "ReceiveShadows": true,
+            "AlbedoR": 0.8,
+            "AlbedoG": 0.82,
+            "AlbedoB": 0.85,
+            "Metallic": 0,
+            "Roughness": 0.6
+          }
+        }
+      ],
+      "Children": []
+    },
+    {
+      "InstanceId": 2,
+      "Name": "Directional Light",
+      "ActiveSelf": true,
+      "Tag": "Untagged",
+      "Layer": "Default",
+      "Position": [
+        0,
+        0,
+        0
+      ],
+      "Rotation": [
+        0,
+        0,
+        0
+      ],
+      "Scale": [
+        1,
+        1,
+        1
+      ],
+      "Components": [
+        {
+          "TypeName": "Light",
+          "Enabled": true,
+          "Properties": {
+            "LightType": "Directional",
+            "ColorR": 1,
+            "ColorG": 1,
+            "ColorB": 1,
+            "Intensity": 1,
+            "Range": 10,
+            "SpotAngle": 30
+          }
+        }
+      ],
+      "Children": []
+    },
+    {
+      "InstanceId": 3,
+      "Name": "Canvas",
+      "ActiveSelf": true,
+      "Tag": "Untagged",
+      "Layer": "Default",
+      "Position": [
+        0,
+        0,
+        0
+      ],
+      "Rotation": [
+        0,
+        0,
+        0
+      ],
+      "Scale": [
+        1,
+        1,
+        1
+      ],
+      "Components": [
+        {
+          "TypeName": "CanvasComponent",
+          "Enabled": true,
+          "Properties": {
+            "RenderMode": "ScreenSpaceOverlay"
+          }
+        },
+        {
+          "TypeName": "CanvasRenderer",
+          "Enabled": true,
+          "Properties": {}
+        }
+      ],
+      "Children": []
+    },
+    {
+      "InstanceId": 4,
+      "Name": "Capsule",
+      "ActiveSelf": true,
+      "Tag": "Untagged",
+      "Layer": "Default",
+      "Position": [
+        0,
+        0,
+        0
+      ],
+      "Rotation": [
+        0,
+        0,
+        0
+      ],
+      "Scale": [
+        1,
+        1,
+        1
+      ],
+      "Components": [
+        {
+          "TypeName": "MeshFilter",
+          "Enabled": true,
+          "Properties": {
+            "MeshPath": "",
+            "MeshName": "Capsule"
+          }
+        },
+        {
+          "TypeName": "MeshRenderer",
+          "Enabled": true,
+          "Properties": {
+            "MaterialPath": "",
+            "CastShadows": true,
+            "ReceiveShadows": true,
+            "AlbedoR": 0.8,
+            "AlbedoG": 0.82,
+            "AlbedoB": 0.85,
+            "Metallic": 0,
+            "Roughness": 0.6
+          }
+        }
+      ],
+      "Children": []
+    },
+    {
+      "InstanceId": 5,
+      "Name": "Camera",
+      "ActiveSelf": true,
+      "Tag": "Untagged",
+      "Layer": "Default",
+      "Position": [
+        0,
+        0,
+        0
+      ],
+      "Rotation": [
+        0,
+        0,
+        0
+      ],
+      "Scale": [
+        1,
+        1,
+        1
+      ],
+      "Components": [
+        {
+          "TypeName": "Camera",
+          "Enabled": true,
+          "Properties": {
+            "FieldOfView": 60,
+            "NearClip": 0.1,
+            "FarClip": 1000,
+            "IsOrthographic": false,
+            "OrthoSize": 5,
+            "BackgroundR": 0.1,
+            "BackgroundG": 0.1,
+            "BackgroundB": 0.1
+          }
+        }
+      ],
+      "Children": []
+    }
+  ]
+}

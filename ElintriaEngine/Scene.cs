@@ -11,7 +11,7 @@ namespace ElintriaEngine.Core
     public class Scene
     {
         public string Name { get; set; } = "Untitled";
-        public string FilePath { get; set; } = "";
+        public string FilePath { get; set; } = "../Assets/Scenes";
 
         private readonly List<GameObject> _roots = new();
         private static int _idCounter = 1;

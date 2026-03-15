@@ -411,7 +411,6 @@ namespace ElintriaEngine.UI
             SceneView.ActiveTab = SceneViewPanel.ViewTab.Scene;
             Inspector.Inspect(null);
         }
-
         /// <summary>
         /// Called every frame by EditorWindow on the main/render thread.
         /// Starts the runner after compilation completes, then ticks it each frame.
@@ -581,6 +580,32 @@ namespace ElintriaEngine.UI
             {
                 Inspector.AcceptScriptDrop(Project.ActiveDrag.FullPath, _projectRoot);
                 Inspector.SetDropHighlight(false);
+                foreach (var p in PanelZOrder()) p.OnMouseUp(e, pos);
+                return;
+            }
+
+            // ── Material (.mat) drop onto MeshRenderer material slot ──────────
+            if (Project.ActiveDrag != null
+                && Project.ActiveDrag.Type == AssetType.Material
+                && Inspector.IsVisible
+                && Inspector.ContainsPoint(pos))
+            {
+                string? fid = Inspector.GetMaterialFieldAt(pos);
+                if (fid != null) Inspector.AcceptFileDrop(fid, Project.ActiveDrag.FullPath);
+                Inspector.HoveredDropFieldId = null;
+                foreach (var p in PanelZOrder()) p.OnMouseUp(e, pos);
+                return;
+            }
+
+            // ── Texture drop onto texture slot ────────────────────────────────
+            if (Project.ActiveDrag != null
+                && Project.ActiveDrag.Type == AssetType.Texture
+                && Inspector.IsVisible
+                && Inspector.ContainsPoint(pos))
+            {
+                string? fid = Inspector.GetTextureFieldAt(pos);
+                if (fid != null) Inspector.AcceptFileDrop(fid, Project.ActiveDrag.FullPath);
+                Inspector.HoveredDropFieldId = null;
                 foreach (var p in PanelZOrder()) p.OnMouseUp(e, pos);
                 return;
             }
@@ -764,6 +789,10 @@ namespace ElintriaEngine.UI
             // Highlight inspector ref fields when dragging a prefab over them
             if (draggingPrefab && Inspector.IsVisible && Inspector.ContainsPoint(pos))
                 Inspector.HoveredDropFieldId = Inspector.GetObjectRefFieldAt(pos);
+            else if (Project.ActiveDrag?.Type == AssetType.Material && Inspector.IsVisible && Inspector.ContainsPoint(pos))
+                Inspector.HoveredDropFieldId = Inspector.GetMaterialFieldAt(pos);
+            else if (Project.ActiveDrag?.Type == AssetType.Texture && Inspector.IsVisible && Inspector.ContainsPoint(pos))
+                Inspector.HoveredDropFieldId = Inspector.GetTextureFieldAt(pos);
             else if (!draggingPrefab && Project.ActiveDrag?.Type != AssetType.Script)
                 Inspector.HoveredDropFieldId = null;
 
@@ -926,52 +955,82 @@ namespace ElintriaEngine.UI
 
         private void SaveScene()
         {
+            // First save ever — ask where to save
             if (string.IsNullOrEmpty(_scene.FilePath))
             {
-                string path = System.IO.Path.Combine(_projectRoot, "Assets", "Scenes",
-                                                     _scene.Name + ".scene");
-                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
-                _scene.FilePath = path;
+                SaveSceneAs();
+                return;
             }
+            CommitSave();
+        }
+
+        private void CommitSave()
+        {
+            if (string.IsNullOrEmpty(_scene.FilePath)) return;
+
+            System.IO.Directory.CreateDirectory(
+                System.IO.Path.GetDirectoryName(_scene.FilePath)!);
+
             SceneSerializer.Save(_scene, _scene.FilePath);
             Console.WriteLine($"[Editor] Saved scene → {_scene.FilePath}");
-
-            // Remember this scene so it auto-loads next time the project is opened
             Core.ProjectManager.SaveLastScene(_projectRoot, _scene.FilePath);
 
-            // Save UIDocument alongside the scene (.uidoc file)
             string uiPath = System.IO.Path.ChangeExtension(_scene.FilePath, ".uidoc");
             Core.UIDocumentSerializer.SaveToFile(_uiDocument, uiPath);
-            Console.WriteLine($"[Editor] Saved UI → {uiPath}");
+        }
+
+        private string BestInitialDir(string preferred = "")
+        {
+            // Walk from most specific to least, return first that exists on disk
+            foreach (var candidate in new[]
+            {
+                preferred,
+                System.IO.Path.Combine(_projectRoot, "Assets", "Scenes"),
+                System.IO.Path.Combine(_projectRoot, "Assets"),
+                _projectRoot,
+            })
+            {
+                if (!string.IsNullOrEmpty(candidate) && System.IO.Directory.Exists(candidate))
+                    return candidate;
+            }
+            return "";
         }
 
         private void OpenScene()
         {
-            // Scan the project's Scenes folder and show a picker overlay
-            string scenesDir = System.IO.Path.Combine(_projectRoot, "Assets", "Scenes");
-            _sceneFiles.Clear();
-            if (System.IO.Directory.Exists(scenesDir))
-            {
-                foreach (var f in System.IO.Directory.GetFiles(scenesDir, "*.scene",
-                             System.IO.SearchOption.AllDirectories))
-                    _sceneFiles.Add(f);
-            }
+            string? path = Core.NativeDialog.OpenFile(
+                "Open Scene",
+                "Scene files (*.scene)|*.scene|All files (*.*)|*.*",
+                BestInitialDir());
 
-            if (_sceneFiles.Count == 0)
+            if (!string.IsNullOrEmpty(path) && System.IO.File.Exists(path))
             {
-                Console.WriteLine("[Editor] No .scene files found in Assets/Scenes/");
+                LoadSceneFromFile(path);
                 return;
             }
 
-            _showScenePicker = true;
-            _scenePickerHover = -1;
+            // Fallback: in-editor overlay picker
+            string scenesDir = System.IO.Path.Combine(_projectRoot, "Assets", "Scenes");
+            _sceneFiles.Clear();
+            if (System.IO.Directory.Exists(scenesDir))
+                foreach (var f in System.IO.Directory.GetFiles(
+                    scenesDir, "*.scene", System.IO.SearchOption.AllDirectories))
+                    _sceneFiles.Add(f);
+
+            if (_sceneFiles.Count > 0) { _showScenePicker = true; _scenePickerHover = -1; }
         }
 
         private void SaveSceneAs()
         {
-            string initDir = string.IsNullOrEmpty(_scene.FilePath)
-                ? System.IO.Path.Combine(_projectRoot, "Assets", "Scenes")
-                : System.IO.Path.GetDirectoryName(_scene.FilePath)!;
+            // Ensure Scenes folder exists so we can offer it as the default
+            string scenesDir = System.IO.Path.Combine(_projectRoot, "Assets", "Scenes");
+            System.IO.Directory.CreateDirectory(scenesDir);
+
+            // If scene already has a path, default to its current directory
+            string preferred = string.IsNullOrEmpty(_scene.FilePath)
+                ? scenesDir
+                : System.IO.Path.GetDirectoryName(_scene.FilePath) ?? scenesDir;
+
             string defName = string.IsNullOrEmpty(_scene.FilePath)
                 ? _scene.Name + ".scene"
                 : System.IO.Path.GetFileName(_scene.FilePath);
@@ -980,27 +1039,22 @@ namespace ElintriaEngine.UI
                 "Save Scene As",
                 "Scene files (*.scene)|*.scene|All files (*.*)|*.*",
                 defName,
-                initDir);
+                BestInitialDir(preferred));
 
             if (string.IsNullOrEmpty(path)) return;
+
             if (!path.EndsWith(".scene", StringComparison.OrdinalIgnoreCase))
                 path += ".scene";
 
             _scene.FilePath = path;
             _scene.Name = System.IO.Path.GetFileNameWithoutExtension(path);
-            SaveScene();
+            CommitSave();
         }
 
         private void OpenSceneDialog()
         {
-            string initDir = System.IO.Path.Combine(_projectRoot, "Assets", "Scenes");
-            string? path = Core.NativeDialog.OpenFile(
-                "Open Scene",
-                "Scene files (*.scene)|*.scene|All files (*.*)|*.*",
-                System.IO.Directory.Exists(initDir) ? initDir : _projectRoot);
-
-            if (!string.IsNullOrEmpty(path) && System.IO.File.Exists(path))
-                LoadSceneFromFile(path);
+            // Same as OpenScene — unified via NativeDialog
+            OpenScene();
         }
 
         // ── Scene picker overlay ───────────────────────────────────────────────

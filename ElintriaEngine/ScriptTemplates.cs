@@ -67,18 +67,41 @@ namespace GameScripts
   ""emission"": [0.0, 0.0, 0.0]
 }";
 
-        public static string Shader(string name) => $@"// Elintria Engine Shader – {name}
-#version 450 core
+        public static string Material(string shaderPath = "Standard") => $@"{{
+  ""shader"": ""{shaderPath}"",
+  ""properties"": {{
+    ""_Color"":     [1.0, 1.0, 1.0, 1.0],
+    ""_Metallic"":  0.0,
+    ""_Roughness"": 0.5
+  }}
+}}";
 
-// ── Vertex ────────────────────────────────────────────────────────────────────
+        public static string Shader(string name) => $@"// Elintria Engine Shader – {name}
+// Properties block defines the fields shown in the Material Inspector.
+// Syntax: _UniformName (""Display Name"", Type) = DefaultValue
+//   Types: Float, Int, Range(min,max), Color, Vector, 2D
+
+Properties
+{{
+    _MainTex    (""Albedo (RGB)"",      2D)          = ""white""
+    _Color      (""Tint Color"",        Color)       = (1, 1, 1, 1)
+    _Metallic   (""Metallic"",          Range(0, 1)) = 0.0
+    _Roughness  (""Roughness"",         Range(0, 1)) = 0.5
+    _EmissionColor (""Emission Color"", Color)       = (0, 0, 0, 1)
+    _NormalMap  (""Normal Map"",        2D)          = ""bump""
+}}
+
+// ── Vertex ──────────────────────────────────────────────────────────────────
 #pragma vertex
-layout(location = 0) in vec3 aPosition;
-layout(location = 1) in vec3 aNormal;
-layout(location = 2) in vec2 aTexCoord;
+#version 330 core
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNormal;
+layout(location=2) in vec2 aUV;
 
 uniform mat4 uModel;
 uniform mat4 uView;
 uniform mat4 uProjection;
+uniform mat3 uNormalMat;
 
 out vec3 vNormal;
 out vec2 vTexCoord;
@@ -86,31 +109,37 @@ out vec3 vFragPos;
 
 void main()
 {{
-    vec4 worldPos = uModel * vec4(aPosition, 1.0);
-    vFragPos  = worldPos.xyz;
-    vNormal   = mat3(transpose(inverse(uModel))) * aNormal;
-    vTexCoord = aTexCoord;
-    gl_Position = uProjection * uView * worldPos;
+    vec4 worldPos = uModel * vec4(aPos, 1.0);
+    vFragPos      = worldPos.xyz;
+    vNormal       = uNormalMat * aNormal;
+    vTexCoord     = aUV;
+    gl_Position   = uProjection * uView * worldPos;
 }}
 
-// ── Fragment ──────────────────────────────────────────────────────────────────
+// ── Fragment ─────────────────────────────────────────────────────────────────
 #pragma fragment
+#version 330 core
 in vec3 vNormal;
 in vec2 vTexCoord;
 in vec3 vFragPos;
 
-uniform sampler2D uAlbedo;
-uniform vec4      uColor;
-uniform vec3      uLightDir;
+uniform sampler2D _MainTex;
+uniform vec4      _Color;
+uniform float     _Metallic;
+uniform float     _Roughness;
+uniform vec4      _EmissionColor;
 
 out vec4 FragColor;
 
 void main()
 {{
-    vec4 albedo    = texture(uAlbedo, vTexCoord) * uColor;
-    float diffuse  = max(dot(normalize(vNormal), normalize(-uLightDir)), 0.0);
-    float ambient  = 0.15;
-    FragColor = vec4((ambient + diffuse) * albedo.rgb, albedo.a);
+    vec4 albedo   = texture(_MainTex, vTexCoord) * _Color;
+    vec3 N        = normalize(vNormal);
+    vec3 lightDir = normalize(vec3(0.6, 1.0, 0.5));
+    float diff    = max(dot(N, lightDir), 0.0);
+    float ambient = 0.2;
+    vec3 emission = _EmissionColor.rgb;
+    FragColor = vec4((ambient + diff) * albedo.rgb + emission, albedo.a);
 }}
 ";
 

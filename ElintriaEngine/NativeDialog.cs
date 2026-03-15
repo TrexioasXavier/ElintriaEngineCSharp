@@ -2,87 +2,159 @@
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace ElintriaEngine.Core
 {
     /// <summary>
-    /// Thin wrapper around OS-native open/save/folder dialogs.
-    /// Windows  → PowerShell WinForms dialogs (no extra dependency).
-    /// Linux    → zenity (most distros ship it; graceful fallback).
-    /// macOS    → osascript.
-    /// All calls are synchronous and return null on cancel / error.
+    /// Cross-platform native file/folder dialogs.
+    /// Windows: writes a temp .ps1 file and runs it on an STA thread — avoids
+    ///          all quoting issues with inline -Command scripts.
+    /// Linux:   zenity
+    /// macOS:   osascript
     /// </summary>
     public static class NativeDialog
     {
-        // ── Open file ─────────────────────────────────────────────────────────
-        public static string? OpenFile(string title = "Open",
-                                       string filter = "All files (*.*)|*.*",
-                                       string initialDir = "")
+        // ── Public API ────────────────────────────────────────────────────────
+
+        public static string? OpenFile(
+            string title = "Open",
+            string filter = "All files (*.*)|*.*",
+            string initialDir = "")
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                return RunPowerShell(BuildOpenFileScript(title, filter, initialDir));
+                return RunPs1(BuildOpenScript(title, filter, initialDir));
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-                return RunZenity($"--file-selection --title=\"{Esc(title)}\"{DirArg(initialDir)}");
+                return Zenity($"--file-selection --title={Q(title)}{InitDir(initialDir)}");
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-                return RunOsascript($"choose file with prompt \"{Esc(title)}\"");
+                return Osascript($"choose file with prompt {Q(title)}");
             return null;
         }
 
-        // ── Save file ─────────────────────────────────────────────────────────
-        public static string? SaveFile(string title = "Save As",
-                                       string filter = "All files (*.*)|*.*",
-                                       string defaultName = "",
-                                       string initialDir = "")
+        public static string? SaveFile(
+            string title = "Save As",
+            string filter = "All files (*.*)|*.*",
+            string defaultName = "",
+            string initialDir = "")
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                return RunPowerShell(BuildSaveFileScript(title, filter, defaultName, initialDir));
+                return RunPs1(BuildSaveScript(title, filter, defaultName, initialDir));
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-                return RunZenity($"--file-selection --save --confirm-overwrite --title=\"{Esc(title)}\"{DirArg(initialDir)}" +
-                                 (string.IsNullOrEmpty(defaultName) ? "" : $" --filename=\"{Esc(defaultName)}\""));
+                return Zenity($"--file-selection --save --confirm-overwrite --title={Q(title)}" +
+                              (string.IsNullOrEmpty(defaultName) ? "" : $" --filename={Q(defaultName)}") +
+                              InitDir(initialDir));
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-                return RunOsascript($"choose file name with prompt \"{Esc(title)}\"" +
-                                    (string.IsNullOrEmpty(defaultName) ? "" : $" default name \"{Esc(defaultName)}\""));
+                return Osascript($"choose file name with prompt {Q(title)}" +
+                                 (string.IsNullOrEmpty(defaultName) ? "" : $" default name {Q(defaultName)}"));
             return null;
         }
 
-        // ── Select folder ─────────────────────────────────────────────────────
-        public static string? SelectFolder(string title = "Select Folder",
-                                           string initialDir = "")
+        public static string? SelectFolder(
+            string title = "Select Folder",
+            string initialDir = "")
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                return RunPowerShell(BuildFolderScript(title, initialDir));
+                return RunPs1(BuildFolderScript(title, initialDir));
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-                return RunZenity($"--file-selection --directory --title=\"{Esc(title)}\"{DirArg(initialDir)}");
+                return Zenity($"--file-selection --directory --title={Q(title)}{InitDir(initialDir)}");
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-                return RunOsascript($"choose folder with prompt \"{Esc(title)}\"");
+                return Osascript($"choose folder with prompt {Q(title)}");
             return null;
         }
 
-        // ── Platform runners ──────────────────────────────────────────────────
-        private static string? RunPowerShell(string script)
+        // ── Windows: write temp .ps1, run on STA thread ───────────────────────
+
+        private static string? RunPs1(string scriptBody)
         {
+            string ps1 = Path.Combine(Path.GetTempPath(), $"elintria_dlg_{Guid.NewGuid():N}.ps1");
             try
             {
-                var psi = new ProcessStartInfo("powershell",
-                    $"-NoProfile -NonInteractive -Command \"{EscPs(script)}\"")
+                File.WriteAllText(ps1, scriptBody, Encoding.UTF8);
+
+                var psi = new ProcessStartInfo
                 {
+                    FileName = "powershell.exe",
+                    Arguments = $"-NoProfile -ExecutionPolicy Bypass -STA -File \"{ps1}\"",
                     RedirectStandardOutput = true,
+                    RedirectStandardError = true,
                     UseShellExecute = false,
                     CreateNoWindow = true,
                 };
+
                 using var p = Process.Start(psi)!;
-                string raw = p.StandardOutput.ReadToEnd().Trim();
+                string stdout = p.StandardOutput.ReadToEnd().Trim();
+                string stderr = p.StandardError.ReadToEnd().Trim();
                 p.WaitForExit();
-                return string.IsNullOrEmpty(raw) ? null : raw;
+
+                if (!string.IsNullOrEmpty(stderr))
+                    Console.WriteLine($"[NativeDialog] PS1 stderr: {stderr}");
+
+                return string.IsNullOrEmpty(stdout) ? null : stdout;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[NativeDialog] PowerShell: {ex.Message}");
+                Console.WriteLine($"[NativeDialog] RunPs1: {ex.Message}");
                 return null;
+            }
+            finally
+            {
+                try { File.Delete(ps1); } catch { }
             }
         }
 
-        private static string? RunZenity(string args)
+        // ── PowerShell script builders ────────────────────────────────────────
+        // Scripts are written to a file, so no argument-quoting issues.
+
+        private static string BuildOpenScript(string title, string filter, string dir)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("Add-Type -AssemblyName System.Windows.Forms");
+            sb.AppendLine("$d = New-Object System.Windows.Forms.OpenFileDialog");
+            sb.AppendLine($"$d.Title  = '{Ps(title)}'");
+            sb.AppendLine($"$d.Filter = '{Ps(WinFilter(filter))}'");
+            if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+                sb.AppendLine($"$d.InitialDirectory = '{Ps(dir)}'");
+            sb.AppendLine("$d.Multiselect = $false");
+            sb.AppendLine("$result = $d.ShowDialog()");
+            sb.AppendLine("if ($result -eq [System.Windows.Forms.DialogResult]::OK) { $d.FileName }");
+            return sb.ToString();
+        }
+
+        private static string BuildSaveScript(string title, string filter,
+                                               string defName, string dir)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("Add-Type -AssemblyName System.Windows.Forms");
+            sb.AppendLine("$d = New-Object System.Windows.Forms.SaveFileDialog");
+            sb.AppendLine($"$d.Title  = '{Ps(title)}'");
+            sb.AppendLine($"$d.Filter = '{Ps(WinFilter(filter))}'");
+            if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+                sb.AppendLine($"$d.InitialDirectory = '{Ps(dir)}'");
+            if (!string.IsNullOrEmpty(defName))
+                sb.AppendLine($"$d.FileName = '{Ps(defName)}'");
+            sb.AppendLine("$d.OverwritePrompt = $true");
+            sb.AppendLine("$result = $d.ShowDialog()");
+            sb.AppendLine("if ($result -eq [System.Windows.Forms.DialogResult]::OK) { $d.FileName }");
+            return sb.ToString();
+        }
+
+        private static string BuildFolderScript(string title, string dir)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("Add-Type -AssemblyName System.Windows.Forms");
+            sb.AppendLine("$d = New-Object System.Windows.Forms.FolderBrowserDialog");
+            sb.AppendLine($"$d.Description = '{Ps(title)}'");
+            sb.AppendLine("$d.ShowNewFolderButton = $true");
+            if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+                sb.AppendLine($"$d.SelectedPath = '{Ps(dir)}'");
+            sb.AppendLine("$result = $d.ShowDialog()");
+            sb.AppendLine("if ($result -eq [System.Windows.Forms.DialogResult]::OK) { $d.SelectedPath }");
+            return sb.ToString();
+        }
+
+        // ── Linux / macOS runners ─────────────────────────────────────────────
+
+        private static string? Zenity(string args)
         {
             try
             {
@@ -104,20 +176,22 @@ namespace ElintriaEngine.Core
             }
         }
 
-        private static string? RunOsascript(string appleScript)
+        private static string? Osascript(string expr)
         {
             try
             {
-                var psi = new ProcessStartInfo("osascript", $"-e \"set result to (POSIX path of ({appleScript}))\" -e \"result\"")
+                // Wrap in POSIX path conversion
+                string script = $"set r to ({expr})\nPOSIX path of r";
+                var psi = new ProcessStartInfo("osascript", $"-e \"{script.Replace("\"", "\\\"")}\"")
                 {
                     RedirectStandardOutput = true,
                     UseShellExecute = false,
                     CreateNoWindow = true,
                 };
                 using var p = Process.Start(psi)!;
-                string raw = p.StandardOutput.ReadToEnd().Trim();
+                string raw = p.StandardOutput.ReadToEnd().Trim().TrimEnd('/');
                 p.WaitForExit();
-                return string.IsNullOrEmpty(raw) ? null : raw.TrimEnd('/');
+                return string.IsNullOrEmpty(raw) ? null : raw;
             }
             catch (Exception ex)
             {
@@ -126,47 +200,19 @@ namespace ElintriaEngine.Core
             }
         }
 
-        // ── PowerShell script builders ────────────────────────────────────────
-        private static string BuildOpenFileScript(string title, string filter, string dir)
-        {
-            string init = string.IsNullOrEmpty(dir) ? "" : $"$d.InitialDirectory='{EscPs(dir)}';";
-            return $"Add-Type -An System.Windows.Forms;" +
-                   $"$d=New-Object System.Windows.Forms.OpenFileDialog;" +
-                   $"$d.Title='{EscPs(title)}';" +
-                   $"$d.Filter='{EscPs(WinFilter(filter))}';" +
-                   $"{init}" +
-                   $"if($d.ShowDialog() -eq 'OK'){{$d.FileName}}";
-        }
-
-        private static string BuildSaveFileScript(string title, string filter, string defName, string dir)
-        {
-            string init = string.IsNullOrEmpty(dir) ? "" : $"$d.InitialDirectory='{EscPs(dir)}';";
-            string name = string.IsNullOrEmpty(defName) ? "" : $"$d.FileName='{EscPs(defName)}';";
-            return $"Add-Type -An System.Windows.Forms;" +
-                   $"$d=New-Object System.Windows.Forms.SaveFileDialog;" +
-                   $"$d.Title='{EscPs(title)}';" +
-                   $"$d.Filter='{EscPs(WinFilter(filter))}';" +
-                   $"{init}{name}" +
-                   $"if($d.ShowDialog() -eq 'OK'){{$d.FileName}}";
-        }
-
-        private static string BuildFolderScript(string title, string dir)
-        {
-            string init = string.IsNullOrEmpty(dir) ? "" : $"$d.SelectedPath='{EscPs(dir)}';";
-            return $"Add-Type -An System.Windows.Forms;" +
-                   $"$d=New-Object System.Windows.Forms.FolderBrowserDialog;" +
-                   $"$d.Description='{EscPs(title)}';" +
-                   $"$d.ShowNewFolderButton=$true;" +
-                   $"{init}" +
-                   $"if($d.ShowDialog() -eq 'OK'){{$d.SelectedPath}}";
-        }
-
         // ── Helpers ───────────────────────────────────────────────────────────
-        private static string Esc(string s) => s.Replace("\"", "\\\"");
-        private static string EscPs(string s) => s.Replace("'", "''");
-        private static string DirArg(string d) => string.IsNullOrEmpty(d) ? "" : $" --filename=\"{Esc(d)}/\"";
 
-        /// Convert "Description (*.ext)|*.ext" → "Description (*.ext)|*.ext" (Windows format is same)
+        /// Escape for PowerShell single-quoted strings (double up single quotes)
+        private static string Ps(string s) => s.Replace("'", "''");
+
+        /// Quote for shell args (Linux/macOS)
+        private static string Q(string s) => $"\"{s.Replace("\"", "\\\"")}\"";
+
+        private static string InitDir(string d) =>
+            string.IsNullOrEmpty(d) ? "" : $" --filename={Q(d + "/")}";
+
+        /// Convert filter "Desc (*.ext)|*.ext" → PowerShell format "Desc (*.ext)|*.ext"
+        /// (WinForms uses same pipe format — no conversion needed)
         private static string WinFilter(string f) => f;
     }
 }

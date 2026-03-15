@@ -245,43 +245,11 @@ namespace ElintriaEngine.Rendering.Scene
 
         private static int CompileStage(ShaderType type, string src)
         {
-
-            Console.WriteLine($"=== {type} SOURCE START ===");
-            var lines1 = src.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
-            for (int i = 0; i < lines1.Length; i++)
-            {
-                string line = lines1[i].Replace("\t", "\\t").Replace(" ", "·"); // · for spaces
-                Console.WriteLine($"{i + 1,3}| {line}");
-                // Optional: hex dump suspicious lines
-                if (i + 1 >= 60 && i + 1 <= 70) // around line 64
-                {
-                    Console.Write("HEX: ");
-                    foreach (char c in lines1[i]) Console.Write($"{(int)c:X4} ");
-                    Console.WriteLine();
-                }
-            }
-            Console.WriteLine($"=== {type} SOURCE END ===\n");
-
-
-
             int id = GL.CreateShader(type);
-
             GL.ShaderSource(id, src);
             GL.CompileShader(id);
-
             GL.GetShader(id, ShaderParameter.CompileStatus, out int ok);
-            if (ok == 0)
-            {
-                string log = GL.GetShaderInfoLog(id);
-                string header = $"Failed to compile {type}:\n";
-                // Optional: print first few lines of source with line numbers
-                var lines = src.Split('\n');
-                for (int i = 0; i < Math.Min(10, lines.Length); i++)
-                    header += $"{i + 1,3}: {lines[i]}\n";
-                header += "...\n";
-
-                throw new Exception(header + "Compile log:\n" + log);
-            }
+            if (ok == 0) throw new Exception($"{type} compile: " + GL.GetShaderInfoLog(id));
             return id;
         }
 
@@ -316,13 +284,13 @@ namespace ElintriaEngine.Rendering.Scene
         public float Roughness { get; set; } = 0.5f;
         public bool Wireframe { get; set; } = false;
 
+        private readonly Dictionary<string, Texture2D> _texCache = new();
+
         public Material(SceneShader shader) => Shader = shader;
 
         public void Bind()
         {
-            if (Wireframe) GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Line);
-            else GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
-
+            SetPolygonMode();
             Shader.Use();
             AlbedoMap.Bind(0);
             Shader.SetInt("uAlbedo", 0);
@@ -331,7 +299,91 @@ namespace ElintriaEngine.Rendering.Scene
             Shader.SetFloat("uRoughness", Roughness);
         }
 
-        public void Dispose() { Shader?.Dispose(); }
+        /// <summary>
+        /// Apply all properties from a MaterialAsset to this shader's uniforms.
+        /// Each declared property maps to a uniform of the same name.
+        /// Texture2D properties are bound to sequential texture units.
+        /// </summary>
+        public void BindFromAsset(Core.MaterialAsset asset)
+        {
+            SetPolygonMode();
+            Shader.Use();
+            int texUnit = 0;
+
+            foreach (var prop in asset.DeclaredProperties)
+            {
+                switch (prop.Type)
+                {
+                    case Core.ShaderPropType.Float:
+                    case Core.ShaderPropType.Range:
+                        Shader.SetFloat(prop.Name,
+                            asset.Properties.GetFloat(prop.Name,
+                                prop.DefaultValue is float f ? f : 0f));
+                        break;
+
+                    case Core.ShaderPropType.Int:
+                        Shader.SetInt(prop.Name,
+                            asset.Properties.GetInt(prop.Name,
+                                prop.DefaultValue is int i ? i : 0));
+                        break;
+
+                    case Core.ShaderPropType.Color:
+                    case Core.ShaderPropType.Vector:
+                        var defV = prop.DefaultValue is Vector4 dv ? dv : Vector4.One;
+                        Shader.SetVec4(prop.Name, asset.Properties.GetColor(prop.Name, defV));
+                        break;
+
+                    case Core.ShaderPropType.Texture2D:
+                        string texPath = asset.Properties.GetTexture(prop.Name, "");
+                        ResolveTexture(texPath, prop.DefaultValue as string).Bind(texUnit);
+                        Shader.SetInt(prop.Name, texUnit);
+                        texUnit++;
+                        break;
+                }
+            }
+
+            if (asset.DeclaredProperties.Count == 0)
+            {
+                AlbedoMap.Bind(0);
+                Shader.SetInt("uAlbedo", 0);
+                Shader.SetVec4("uColor", Color);
+                Shader.SetFloat("uMetallic", Metallic);
+                Shader.SetFloat("uRoughness", Roughness);
+            }
+        }
+
+        private void SetPolygonMode()
+        {
+            if (Wireframe) GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Line);
+            else GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
+        }
+
+        private Texture2D ResolveTexture(string path, string? hint)
+        {
+            if (!string.IsNullOrEmpty(path))
+            {
+                if (!_texCache.TryGetValue(path, out var t))
+                    _texCache[path] = t = System.IO.File.Exists(path)
+                        ? Texture2D.Load(path) : Fallback(hint);
+                return t;
+            }
+            return Fallback(hint);
+        }
+
+        private static Texture2D Fallback(string? hint) =>
+            hint?.ToLowerInvariant() switch
+            {
+                "black" => Texture2D.Black,
+                "gray" => Texture2D.Gray,
+                "bump" => Texture2D.Gray,
+                _ => Texture2D.White,
+            };
+
+        public void Dispose()
+        {
+            Shader?.Dispose();
+            foreach (var t in _texCache.Values) t.Dispose();
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -416,17 +468,19 @@ void main(){
 
     // -- Spot lights --
     for (int i = 0; i < uSpotCount; i++) {
-        vec3 toFrag = vWorldPos - uSpotPos[i];
-        float dist = length(toFrag);
+        vec3  toFrag = vWorldPos - uSpotPos[i];
+        float dist   = length(toFrag);
         if (dist > uSpotRange[i]) continue;
-        vec3 L = normalize(-toFrag);
-        float cosA = dot(normalize(toFrag), normalize(uSpotDir[i]));
-        float cone = smoothstep(uSpotCosOuter[i], uSpotCosInner[i], cosA);
+
+        vec3  L      = normalize(-toFrag);
+        float cosA   = dot(normalize(toFrag), normalize(uSpotDir[i]));
+        float cone   = smoothstep(uSpotCosOuter[i], uSpotCosInner[i], cosA);
         if (cone <= 0.0) continue;
-        float atten = cone * (1.0 - dist / uSpotRange[i]);
-        vec3 H = normalize(L + V);
-        float diff = max(dot(N, L), 0.0);
-        float spec = pow(max(dot(N, H), 0.0), shininess);
+
+        float atten  = cone * (1.0 - dist / uSpotRange[i]);
+        vec3  H      = normalize(L + V);
+        float diff   = max(dot(N, L), 0.0);
+        float spec   = pow(max(dot(N, H), 0.0), shininess);
         Lo += (albedo.rgb * diff + spec * mix(0.04, 1.0, uMetallic))
               * uSpotColor[i] * atten;
     }

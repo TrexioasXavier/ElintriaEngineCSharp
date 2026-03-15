@@ -245,17 +245,41 @@ namespace ElintriaEngine.Rendering.Scene
             var normalMat = MathF.Abs(m3.Determinant) > 1e-6f
                 ? Matrix3.Invert(Matrix3.Transpose(m3)) : Matrix3.Identity;
 
-            _defaultMat!.Bind();
-            int prog = _stdShader.Program;
+            // ── Material / shader selection ───────────────────────────────────
+            var mr = go.GetComponent<Core.MeshRenderer>();
+            string matPath = mr?.MaterialPath ?? "";
 
-            _stdShader.SetMat4("uModel", ref model);
-            _stdShader.SetMat4("uView", ref view);
-            _stdShader.SetMat4("uProjection", ref proj);
+            SceneShader activeShader = _stdShader;
+            Material activeMat = _defaultMat!;
+            Core.MaterialAsset? matAsset = null;
+
+            if (!string.IsNullOrEmpty(matPath) && System.IO.File.Exists(matPath))
+            {
+                matAsset = LoadOrGetMaterialAsset(matPath);
+                if (matAsset != null)
+                {
+                    var compiledMat = LoadOrGetCompiledMaterial(matPath, matAsset);
+                    if (compiledMat != null) { activeMat = compiledMat; activeShader = compiledMat.Shader; }
+                }
+            }
+
+            // Bind material (uses asset properties if present, standard uniforms otherwise)
+            if (matAsset != null && matAsset.DeclaredProperties.Count > 0)
+                activeMat.BindFromAsset(matAsset);
+            else
+                activeMat.Bind();
+
+            int prog = activeShader.Program;
+
+            activeShader.SetMat4("uModel", ref model);
+            activeShader.SetMat4("uView", ref view);
+            activeShader.SetMat4("uProjection", ref proj);
             GL.UniformMatrix3(GL.GetUniformLocation(prog, "uNormalMat"), false, ref normalMat);
-            _stdShader.SetVec3("uCamPos", camPos);
-            GL.Uniform1(GL.GetUniformLocation(prog, "uAmbient"), ambient);
-            GL.Uniform1(GL.GetUniformLocation(prog, "uMetallic"), 0f);
-            GL.Uniform1(GL.GetUniformLocation(prog, "uRoughness"), 0.5f);
+            // Try setting common uniforms (silently ignored if not in custom shader)
+            TrySetUniform(prog, "uCamPos", camPos);
+            TrySetUniform(prog, "uAmbient", ambient);
+            TrySetUniform(prog, "uMetallic", mr?.Metallic ?? 0f);
+            TrySetUniform(prog, "uRoughness", mr?.Roughness ?? 0.5f);
 
             // Directional lights
             int dirCount = editorFakeLight ? 1 : Math.Min(dirLights.Count, 4);
@@ -298,12 +322,108 @@ namespace ElintriaEngine.Rendering.Scene
                 GL.Uniform1(GL.GetUniformLocation(prog, $"uSpotCosOuter[{i}]"), outer);
             }
 
-            var mr = go.GetComponent<Core.MeshRenderer>();
-            _stdShader.SetVec4("uColor", mr != null
-                ? new Vector4(mr.AlbedoR, mr.AlbedoG, mr.AlbedoB, 1f)
-                : new Vector4(0.8f, 0.82f, 0.85f, 1f));
+            // Only override color if no custom material provided it via _Color property
+            if (matAsset == null || !matAsset.Properties.Has("_Color"))
+            {
+                TrySetUniform(prog, "uColor", mr != null
+                    ? new Vector4(mr.AlbedoR, mr.AlbedoG, mr.AlbedoB, 1f)
+                    : new Vector4(0.8f, 0.82f, 0.85f, 1f));
+            }
 
             mesh.Draw();
+        }
+
+        // ── Material asset caches ─────────────────────────────────────────────
+        private readonly Dictionary<string, Core.MaterialAsset> _matAssetCache = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, Material> _compiledMatCache = new(StringComparer.OrdinalIgnoreCase);
+
+        private Core.MaterialAsset? LoadOrGetMaterialAsset(string matPath)
+        {
+            if (!_matAssetCache.TryGetValue(matPath, out var asset))
+            {
+                asset = Core.MaterialAsset.Load(matPath);
+                // Load declared properties from the referenced shader
+                if (!string.IsNullOrEmpty(asset.ShaderPath))
+                {
+                    string src = LoadShaderSource(asset.ShaderPath);
+                    if (!string.IsNullOrEmpty(src))
+                        asset.DeclaredProperties.AddRange(Core.MaterialAsset.ParseShaderProperties(src));
+                }
+                _matAssetCache[matPath] = asset;
+            }
+            return asset;
+        }
+
+        private Material? LoadOrGetCompiledMaterial(string matPath, Core.MaterialAsset asset)
+        {
+            if (_compiledMatCache.TryGetValue(matPath, out var existing)) return existing;
+            try
+            {
+                string src = LoadShaderSource(asset.ShaderPath);
+                if (string.IsNullOrEmpty(src)) return null;
+                var (vert, frag) = SplitShaderSource(src);
+                if (string.IsNullOrEmpty(vert) || string.IsNullOrEmpty(frag)) return null;
+                var sh = SceneShader.Compile(vert, frag);
+                var mat = new Material(sh) { Name = System.IO.Path.GetFileNameWithoutExtension(matPath) };
+                _compiledMatCache[matPath] = mat;
+                Console.WriteLine($"[SceneRenderer] Compiled shader for '{System.IO.Path.GetFileName(matPath)}'");
+                return mat;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[SceneRenderer] Shader compile failed: {ex.Message}");
+                return null;
+            }
+        }
+
+        public void InvalidateMaterial(string matPath)
+        {
+            _matAssetCache.Remove(matPath);
+            if (_compiledMatCache.TryGetValue(matPath, out var old)) { old.Dispose(); _compiledMatCache.Remove(matPath); }
+        }
+
+        private string LoadShaderSource(string shaderPathOrName)
+        {
+            // Full path
+            if (System.IO.File.Exists(shaderPathOrName))
+                return System.IO.File.ReadAllText(shaderPathOrName);
+            // Name only — search standard locations (not built-in names like "Standard")
+            return "";
+        }
+
+        private static (string Vert, string Frag) SplitShaderSource(string src)
+        {
+            // Split on #pragma vertex / #pragma fragment markers
+            int vIdx = src.IndexOf("#pragma vertex", StringComparison.OrdinalIgnoreCase);
+            int fIdx = src.IndexOf("#pragma fragment", StringComparison.OrdinalIgnoreCase);
+            if (vIdx < 0 || fIdx < 0) return ("", "");
+
+            // Vertex: from after "#pragma vertex\n" to before "#pragma fragment"
+            int vStart = src.IndexOf('\n', vIdx) + 1;
+            string vert = src[vStart..fIdx].Trim();
+
+            // Fragment: everything after "#pragma fragment\n"
+            int fStart = src.IndexOf('\n', fIdx) + 1;
+            string frag = src[fStart..].Trim();
+
+            return (vert, frag);
+        }
+
+        // Safely set uniforms — silently no-ops if the uniform doesn't exist in the current shader
+        private static void TrySetUniform(int prog, string name, float v)
+        {
+            int loc = GL.GetUniformLocation(prog, name);
+            if (loc >= 0) GL.Uniform1(loc, v);
+        }
+        private static void TrySetUniform(int prog, string name, Vector3 v)
+        {
+            int loc = GL.GetUniformLocation(prog, name);
+            if (loc >= 0) GL.Uniform3(loc, v);
+        }
+        private static void TrySetUniform(int prog, string name, Vector4 v)
+        {
+            int loc = GL.GetUniformLocation(prog, name);
+            if (loc >= 0) GL.Uniform4(loc, v.X, v.Y, v.Z, v.W);
         }
 
         // ── Particle rendering (billboard quads) ──────────────────────────────
@@ -478,6 +598,7 @@ namespace ElintriaEngine.Rendering.Scene
         public void Dispose()
         {
             foreach (var m in _meshCache.Values) m.Dispose();
+            foreach (var m in _compiledMatCache.Values) m.Dispose();
             _gridMesh?.Dispose(); _axisMesh?.Dispose();
             _stdShader?.Dispose(); _gridShader?.Dispose(); _flatShader?.Dispose();
             _defaultMat?.Dispose();

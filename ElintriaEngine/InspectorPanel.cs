@@ -16,7 +16,13 @@ namespace ElintriaEngine.UI.Panels
         string Id,
         object? Value,
         Type FieldType,
-        Action<object?> Setter);
+        Action<object?> Setter)
+    {
+        // Optional: set for range-slider track records so drag can compute proper fraction
+        public bool IsSliderTrack { get; init; } = false;
+        public float SliderMin { get; init; } = 0f;
+        public float SliderMax { get; init; } = 1f;
+    };
 
     public class InspectorPanel : Panel
     {
@@ -52,6 +58,12 @@ namespace ElintriaEngine.UI.Panels
         private float _dragStartX;
         private float _dragStartVal;
         private Action<float>? _dragSetter;
+
+        // Slider-track drag extras
+        private bool _dragIsSlider;
+        private RectangleF _dragTrackRect;
+        private float _dragSliderMin;
+        private float _dragSliderMax;
 
         // Add Component popup
         private bool _showAddComp;
@@ -373,8 +385,7 @@ namespace ElintriaEngine.UI.Panels
 
         private static string Truncate(string s, int max) =>
             s.Length <= max ? s : s[..max] + "…";
-
-        // Store mouse position for header hover effects 
+         
 
         // ── Transform ─────────────────────────────────────────────────────────
         private void DrawTransform(IEditorRenderer r, RectangleF cr, ref float y)
@@ -469,6 +480,17 @@ namespace ElintriaEngine.UI.Panels
                 y += 3f; ContentHeight += 3f;
                 if (!psExpanded) return;
                 _psInspector.Draw(r, cr, ps, ref y, ref ContentHeight);
+                return;
+            }
+
+            // ── MeshRenderer — material picker + shader property fields ───────
+            if (comp is Core.MeshRenderer mr)
+            {
+                bool mrExpanded = DrawSectionHeader(r, cr, "Mesh Renderer", () => _target?.RemoveComponent(comp), ref y, comp);
+                r.DrawLine(new PointF(cr.X, y), new PointF(cr.Right, y), Color.FromArgb(255, 50, 50, 50));
+                y += 3f; ContentHeight += 3f;
+                if (!mrExpanded) return;
+                DrawMeshRendererInspector(r, cr, mr, cid, ref y);
                 return;
             }
 
@@ -1041,6 +1063,296 @@ namespace ElintriaEngine.UI.Panels
                 { _refPickerHover = idx; break; }
                 iy += itemH; idx++;
             }
+        }
+
+        // ── Mesh Renderer inspector ───────────────────────────────────────────
+        private void DrawMeshRendererInspector(IEditorRenderer r, RectangleF cr,
+            Core.MeshRenderer mr, string cid, ref float y)
+        {
+            DrawBoolField(r, cr, "Enabled", mr.Enabled, ref y, cid + "_en", v => mr.Enabled = v);
+            DrawBoolField(r, cr, "Cast Shadows", mr.CastShadows, ref y, cid + "_cs", v => mr.CastShadows = v);
+            DrawBoolField(r, cr, "Recv Shadows", mr.ReceiveShadows, ref y, cid + "_rs", v => mr.ReceiveShadows = v);
+
+            // ── Material slot ─────────────────────────────────────────────────
+            DrawLabel(r, cr, "Material", y);
+            float fw = cr.Width - LW - PAD;
+            const float BtnW = 18f;
+            var matRect = new RectangleF(cr.X + LW, y + 2f, fw - BtnW - 1f, FH - 4f);
+            var matBtn = new RectangleF(matRect.Right + 1f, y + 2f, BtnW, FH - 4f);
+
+            bool matHover = HoveredDropFieldId == cid + "_mat";
+            r.FillRect(matRect, matHover ? Color.FromArgb(255, 40, 80, 140) : Color.FromArgb(255, 38, 38, 44));
+            r.DrawRect(matRect, matHover ? Color.FromArgb(255, 80, 160, 255) : ColBorder);
+            r.FillRect(matBtn, Color.FromArgb(255, 48, 52, 62));
+            r.DrawRect(matBtn, ColBorder);
+            r.DrawText("⊙", new PointF(matBtn.X + 3f, matBtn.Y + 2f), Color.FromArgb(200, 160, 195, 255), 9f);
+
+            string matName = string.IsNullOrEmpty(mr.MaterialPath)
+                ? "None (Material)"
+                : System.IO.Path.GetFileNameWithoutExtension(mr.MaterialPath);
+            r.DrawText(matName, new PointF(matRect.X + 4f, matRect.Y + 3f),
+                string.IsNullOrEmpty(mr.MaterialPath)
+                    ? Color.FromArgb(160, 140, 140, 150)
+                    : Color.FromArgb(255, 200, 220, 255), 9f);
+
+            // Register for drag-drop
+            _fields.Add(new FieldRecord(matRect, cid + "_mat", mr.MaterialPath,
+                typeof(string), nv => {
+                    if (nv is string s) mr.MaterialPath = s;
+                }));
+            // Also register a click to open a simple file-picker
+            RegisterClick(matBtn, cid + "_matbtn", () => PickMaterialFile(mr));
+            RegisterClick(matRect, cid + "_matrect", () => PickMaterialFile(mr));
+            y += FH; ContentHeight += FH;
+
+            // ── Albedo colour (only if no .mat assigned) ──────────────────────
+            if (string.IsNullOrEmpty(mr.MaterialPath))
+            {
+                DrawFloatField(r, cr, "Albedo R", mr.AlbedoR, ref y, cid + "_ar", v => mr.AlbedoR = v);
+                DrawFloatField(r, cr, "Albedo G", mr.AlbedoG, ref y, cid + "_ag", v => mr.AlbedoG = v);
+                DrawFloatField(r, cr, "Albedo B", mr.AlbedoB, ref y, cid + "_ab", v => mr.AlbedoB = v);
+                DrawFloatField(r, cr, "Metallic", mr.Metallic, ref y, cid + "_me", v => mr.Metallic = v);
+                DrawFloatField(r, cr, "Roughness", mr.Roughness, ref y, cid + "_ro", v => mr.Roughness = v);
+            }
+            else
+            {
+                // ── Shader property fields from the .mat asset ────────────────
+                DrawMaterialPropertyFields(r, cr, mr, cid, ref y);
+            }
+
+            r.DrawLine(new PointF(cr.X, y), new PointF(cr.Right, y), Color.FromArgb(255, 50, 50, 50));
+            y += 3f; ContentHeight += 3f;
+        }
+
+        private void DrawMaterialPropertyFields(IEditorRenderer r, RectangleF cr,
+            Core.MeshRenderer mr, string cid, ref float y)
+        {
+            if (string.IsNullOrEmpty(mr.MaterialPath) || !System.IO.File.Exists(mr.MaterialPath))
+                return;
+
+            var asset = Core.MaterialCache.Get(mr.MaterialPath);
+
+            // Reload declared properties from the shader if not yet populated
+            if (asset.DeclaredProperties.Count == 0 && !string.IsNullOrEmpty(asset.ShaderPath)
+                && System.IO.File.Exists(asset.ShaderPath))
+            {
+                string src = System.IO.File.ReadAllText(asset.ShaderPath);
+                asset.DeclaredProperties.AddRange(Core.MaterialAsset.ParseShaderProperties(src));
+            }
+
+            if (asset.DeclaredProperties.Count == 0)
+            {
+                r.DrawText("No shader properties declared.", new PointF(cr.X + PAD, y + 3f), ColTextDim, 9f);
+                y += 18f; ContentHeight += 18f;
+                return;
+            }
+
+            bool dirty = false;
+            foreach (var prop in asset.DeclaredProperties)
+            {
+                string pid = cid + "_mp_" + prop.Name;
+                switch (prop.Type)
+                {
+                    case Core.ShaderPropType.Float:
+                        {
+                            float def = prop.DefaultValue is float f ? f : 0f;
+                            float cur = asset.Properties.GetFloat(prop.Name, def);
+                            DrawFloatField(r, cr, prop.DisplayName, cur, ref y, pid, nv => {
+                                asset.Properties.Set(prop.Name, nv); dirty = true;
+                            });
+                            break;
+                        }
+                    case Core.ShaderPropType.Int:
+                        {
+                            int def = prop.DefaultValue is int i ? i : 0;
+                            int cur = asset.Properties.GetInt(prop.Name, def);
+                            DrawIntField(r, cr, prop.DisplayName, cur, ref y, pid, nv => {
+                                asset.Properties.Set(prop.Name, nv); dirty = true;
+                            });
+                            break;
+                        }
+                    case Core.ShaderPropType.Range:
+                        {
+                            float def = prop.DefaultValue is float f ? f : prop.Min;
+                            float cur = asset.Properties.GetFloat(prop.Name, def);
+                            DrawRangeField(r, cr, prop.DisplayName, cur, prop.Min, prop.Max, ref y, pid, nv => {
+                                asset.Properties.Set(prop.Name, nv); dirty = true;
+                            });
+                            break;
+                        }
+                    case Core.ShaderPropType.Color:
+                        {
+                            var def = prop.DefaultValue is OpenTK.Mathematics.Vector4 dv ? dv : OpenTK.Mathematics.Vector4.One;
+                            var cur = asset.Properties.GetColor(prop.Name, def);
+                            DrawColorVec4Field(r, cr, prop.DisplayName, cur, ref y, pid, nv => {
+                                asset.Properties.Set(prop.Name, nv); dirty = true;
+                            });
+                            break;
+                        }
+                    case Core.ShaderPropType.Vector:
+                        {
+                            var def = prop.DefaultValue is OpenTK.Mathematics.Vector4 dv ? dv : OpenTK.Mathematics.Vector4.Zero;
+                            var cur = asset.Properties.GetVector(prop.Name, def);
+                            DrawVec4Field(r, cr, prop.DisplayName, cur, ref y, pid, nv => {
+                                asset.Properties.Set(prop.Name, nv); dirty = true;
+                            });
+                            break;
+                        }
+                    case Core.ShaderPropType.Texture2D:
+                        {
+                            string cur = asset.Properties.GetTexture(prop.Name, "");
+                            DrawTextureSlot(r, cr, prop.DisplayName, cur, ref y, pid, nv => {
+                                asset.Properties.Set(prop.Name, nv); dirty = true;
+                            });
+                            break;
+                        }
+                }
+            }
+
+            // Auto-save .mat whenever a value changes
+            if (dirty)
+            {
+                try { asset.Save(mr.MaterialPath); }
+                catch (Exception ex) { Console.WriteLine($"[Inspector] Mat save: {ex.Message}"); }
+                Core.MaterialCache.Invalidate(mr.MaterialPath);
+                SceneView?.Renderer.InvalidateMaterial(mr.MaterialPath);
+            }
+        }
+
+        private void PickMaterialFile(Core.MeshRenderer mr)
+        {
+            string initDir = string.IsNullOrEmpty(ProjectRoot) ? "" :
+                System.IO.Path.Combine(ProjectRoot, "Assets", "Materials");
+            string? path = Core.NativeDialog.OpenFile("Select Material", "Material files (*.mat)|*.mat", initDir);
+            if (!string.IsNullOrEmpty(path)) mr.MaterialPath = path;
+        }
+
+        // ── Range slider field ────────────────────────────────────────────────
+        private void DrawRangeField(IEditorRenderer r, RectangleF cr, string label,
+            float value, float min, float max, ref float y, string id, Action<float> setter)
+        {
+            DrawLabel(r, cr, label, y);
+            float fw = cr.Width - LW - PAD;
+            float tw = Math.Max(36f, fw * 0.28f);
+            float sw = fw - tw - 4f;
+
+            // Slider track
+            var track = new RectangleF(cr.X + LW, y + (FH - 6f) / 2f, sw, 6f);
+            r.FillRect(track, Color.FromArgb(255, 44, 44, 50));
+            r.DrawRect(track, ColBorder);
+
+            float frac = max > min ? Math.Clamp((value - min) / (max - min), 0f, 1f) : 0f;
+            if (frac > 0) r.FillRect(new RectangleF(track.X, track.Y, track.Width * frac, 6f), ColAccent);
+
+            // Thumb
+            float thumbX = track.X + track.Width * frac - 4f;
+            r.FillRect(new RectangleF(thumbX, y + 3f, 8f, FH - 6f), Color.FromArgb(255, 200, 210, 240));
+
+            // Value box
+            var vr = new RectangleF(cr.X + LW + sw + 4f, y + 2f, tw, FH - 4f);
+            string disp = id == _editId ? _editBuf + "|" : value.ToString("F2");
+            r.FillRect(vr, Color.FromArgb(255, 38, 38, 44));
+            r.DrawRect(vr, ColBorder);
+            r.DrawText(disp, new PointF(vr.X + 3f, vr.Y + 3f), ColText, 9f);
+
+            _fields.Add(new FieldRecord(track, id + "_sl", value, typeof(float),
+                obj => setter(Math.Clamp(obj is float f ? f : value, min, max)))
+            { IsSliderTrack = true, SliderMin = min, SliderMax = max });
+            _fields.Add(new FieldRecord(vr, id, value, typeof(float),
+                obj => setter(obj is float f2 ? Math.Clamp(f2, min, max) : value)));
+            y += FH; ContentHeight += FH;
+        }
+
+        // ── Color (Vector4 RGBA) field ────────────────────────────────────────
+        private void DrawColorVec4Field(IEditorRenderer r, RectangleF cr, string label,
+            OpenTK.Mathematics.Vector4 value, ref float y, string id,
+            Action<OpenTK.Mathematics.Vector4> setter)
+        {
+            DrawLabel(r, cr, label, y);
+            float fw = cr.Width - LW - PAD;
+            var swatch = new RectangleF(cr.X + LW, y + 2f, fw, FH - 4f);
+            r.FillRect(swatch, Color.FromArgb(
+                (int)(value.W * 255), (int)(value.X * 255),
+                (int)(value.Y * 255), (int)(value.Z * 255)));
+            r.DrawRect(swatch, ColBorder);
+            r.DrawText($"R:{value.X:F2} G:{value.Y:F2} B:{value.Z:F2} A:{value.W:F2}",
+                new PointF(swatch.X + 4f, swatch.Y + 3f), Color.White, 8f);
+            _fields.Add(new FieldRecord(swatch, id, value, typeof(OpenTK.Mathematics.Vector4),
+                obj => { if (obj is OpenTK.Mathematics.Vector4 v) setter(v); }));
+            y += FH; ContentHeight += FH;
+        }
+
+        // ── Vector4 field ─────────────────────────────────────────────────────
+        private void DrawVec4Field(IEditorRenderer r, RectangleF cr, string label,
+            OpenTK.Mathematics.Vector4 value, ref float y, string id,
+            Action<OpenTK.Mathematics.Vector4> setter)
+        {
+            DrawLabel(r, cr, label, y);
+            float fw = (cr.Width - LW - PAD) / 4f;
+            string[] axes = { "X", "Y", "Z", "W" };
+            float[] vals = { value.X, value.Y, value.Z, value.W };
+            for (int i = 0; i < 4; i++)
+            {
+                var fr = new RectangleF(cr.X + LW + i * fw, y + 2f, fw - 2f, FH - 4f);
+                string disp = (id + "_" + i) == _editId ? _editBuf + "|" : vals[i].ToString("F2");
+                r.FillRect(fr, Color.FromArgb(255, 38, 38, 44));
+                r.DrawRect(fr, ColBorder);
+                r.DrawText(axes[i], new PointF(fr.X + 2f, fr.Y + 2f), ColTextDim, 7f);
+                r.DrawText(disp, new PointF(fr.X + 10f, fr.Y + 3f), ColText, 9f);
+                int ci = i;
+                _fields.Add(new FieldRecord(fr, id + "_" + i, vals[i], typeof(float), obj => {
+                    if (obj is float fv)
+                    {
+                        var arr = new[] { value.X, value.Y, value.Z, value.W };
+                        arr[ci] = fv;
+                        setter(new OpenTK.Mathematics.Vector4(arr[0], arr[1], arr[2], arr[3]));
+                    }
+                }));
+            }
+            y += FH; ContentHeight += FH;
+        }
+
+        // ── Texture slot field ────────────────────────────────────────────────
+        private void DrawTextureSlot(IEditorRenderer r, RectangleF cr, string label,
+            string texPath, ref float y, string id, Action<string> setter)
+        {
+            DrawLabel(r, cr, label, y);
+            float fw = cr.Width - LW - PAD;
+            const float BtnW = 18f;
+            var fr = new RectangleF(cr.X + LW, y + 2f, fw - BtnW - 1f, FH - 4f);
+            var btn = new RectangleF(fr.Right + 1f, y + 2f, BtnW, FH - 4f);
+
+            bool hover = HoveredDropFieldId == id;
+            r.FillRect(fr, hover ? Color.FromArgb(255, 40, 80, 140) : Color.FromArgb(255, 38, 38, 44));
+            r.DrawRect(fr, hover ? Color.FromArgb(255, 80, 160, 255) : ColBorder);
+            r.FillRect(btn, Color.FromArgb(255, 48, 52, 62));
+            r.DrawRect(btn, ColBorder);
+            r.DrawText("⊙", new PointF(btn.X + 3f, btn.Y + 2f), Color.FromArgb(200, 160, 195, 255), 9f);
+
+            string disp = string.IsNullOrEmpty(texPath)
+                ? "None (Texture2D)"
+                : System.IO.Path.GetFileName(texPath);
+            r.DrawText(disp, new PointF(fr.X + 4f, fr.Y + 3f),
+                string.IsNullOrEmpty(texPath)
+                    ? Color.FromArgb(160, 140, 140, 150)
+                    : Color.FromArgb(255, 200, 220, 255), 9f);
+
+            // Texture can be dragged from project panel (file path string)
+            _fields.Add(new FieldRecord(fr, id, texPath, typeof(string),
+                obj => { if (obj is string s) setter(s); }));
+            RegisterClick(btn, id + "_btn", () => {
+                string? p = Core.NativeDialog.OpenFile("Select Texture",
+                    "Image files (*.png;*.jpg;*.jpeg;*.tga;*.bmp)|*.png;*.jpg;*.jpeg;*.tga;*.bmp",
+                    string.IsNullOrEmpty(ProjectRoot) ? "" : System.IO.Path.Combine(ProjectRoot, "Assets", "Textures"));
+                if (!string.IsNullOrEmpty(p)) setter(p);
+            });
+            RegisterClick(fr, id + "_rect", () => {
+                string? p = Core.NativeDialog.OpenFile("Select Texture",
+                    "Image files (*.png;*.jpg;*.jpeg;*.tga;*.bmp)|*.png;*.jpg;*.jpeg;*.tga;*.bmp",
+                    string.IsNullOrEmpty(ProjectRoot) ? "" : System.IO.Path.Combine(ProjectRoot, "Assets", "Textures"));
+                if (!string.IsNullOrEmpty(p)) setter(p);
+            });
+            y += FH; ContentHeight += FH;
         }
 
         private void DrawDropOverlay(IEditorRenderer r, RectangleF cr)
@@ -1700,10 +2012,21 @@ namespace ElintriaEngine.UI.Panels
 
                     if (field.FieldType == typeof(float) || field.Id.Contains("_f_") || field.Id.Contains("t_"))
                     {
-                        // Start drag for float
-                        if (_editId == field.Id)
+                        if (_editId == field.Id) { /* already editing text */ }
+                        else if (field.IsSliderTrack)
                         {
-                            // Already editing text – don't switch to drag
+                            // Immediate set from click position, then enable drag
+                            float frac = Math.Clamp((pos.X - field.Bounds.X) / Math.Max(field.Bounds.Width, 1f), 0f, 1f);
+                            float val = field.SliderMin + frac * (field.SliderMax - field.SliderMin);
+                            field.Setter(val);
+                            _dragId = field.Id;
+                            _dragStartX = pos.X;
+                            _dragStartVal = val;
+                            _dragSetter = v => field.Setter(v);
+                            _dragIsSlider = true;
+                            _dragTrackRect = field.Bounds;
+                            _dragSliderMin = field.SliderMin;
+                            _dragSliderMax = field.SliderMax;
                         }
                         else
                         {
@@ -1711,6 +2034,7 @@ namespace ElintriaEngine.UI.Panels
                             _dragStartX = pos.X;
                             _dragStartVal = field.Value is float fv ? fv : 0f;
                             _dragSetter = v => field.Setter(v);
+                            _dragIsSlider = false;
                         }
                         return;
                     }
@@ -1752,7 +2076,7 @@ namespace ElintriaEngine.UI.Panels
 
         public override void OnMouseUp(MouseButtonEventArgs e, PointF pos)
         {
-            _dragId = null; _dragSetter = null;
+            _dragId = null; _dragSetter = null; _dragIsSlider = false;
             _compDragCandidate = null;
             if (_compDragging) { _compDragging = false; ActiveDragComponent = null; }
             _psInspector.EndDrag();
@@ -1775,8 +2099,17 @@ namespace ElintriaEngine.UI.Panels
             // Float field drag
             if (_dragId != null && _dragSetter != null)
             {
-                float delta = (pos.X - _dragStartX) * 0.02f;
-                _dragSetter(_dragStartVal + delta);
+                if (_dragIsSlider)
+                {
+                    float frac = Math.Clamp(
+                        (pos.X - _dragTrackRect.X) / Math.Max(_dragTrackRect.Width, 1f), 0f, 1f);
+                    _dragSetter(_dragSliderMin + frac * (_dragSliderMax - _dragSliderMin));
+                }
+                else
+                {
+                    float delta = (pos.X - _dragStartX) * 0.02f;
+                    _dragSetter(_dragStartVal + delta);
+                }
             }
             // Particle system slider drag
             if (_psInspector.IsDragging && _target != null)
@@ -1941,6 +2274,45 @@ namespace ElintriaEngine.UI.Panels
                 if (f.Bounds.Contains(pos)) return f.Id;
             }
             return null;
+        }
+
+        /// <summary>Returns the id of the material slot field under the cursor.</summary>
+        public string? GetMaterialFieldAt(PointF pos)
+        {
+            foreach (var f in _fields)
+            {
+                // Material slots use string type and have id ending in "_mat"
+                if (f.FieldType != typeof(string)) continue;
+                if (!f.Id.EndsWith("_mat", StringComparison.Ordinal)) continue;
+                if (f.Bounds.Contains(pos)) return f.Id;
+            }
+            return null;
+        }
+
+        /// <summary>Returns the id of the texture slot field under the cursor.</summary>
+        public string? GetTextureFieldAt(PointF pos)
+        {
+            foreach (var f in _fields)
+            {
+                if (f.FieldType != typeof(string)) continue;
+                if (f.Id.EndsWith("_mat", StringComparison.Ordinal)) continue;
+                if (f.Bounds.Contains(pos)) return f.Id;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Called when a file is dropped onto a string field (material or texture slot).
+        /// </summary>
+        public void AcceptFileDrop(string fieldId, string filePath)
+        {
+            foreach (var f in _fields)
+            {
+                if (f.Id != fieldId) continue;
+                if (f.FieldType == typeof(string))
+                    f.Setter(filePath);
+                break;
+            }
         }
 
         // ── Script drop ───────────────────────────────────────────────────────
