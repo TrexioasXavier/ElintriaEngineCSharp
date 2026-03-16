@@ -9,7 +9,7 @@
       "Tag": "Untagged",
       "Layer": "Default",
       "Position": [
-        3.264002,
+        0.14400017,
         0,
         3.696003
       ],
@@ -60,7 +60,25 @@
               1,
               1
             ],
-            "IsTrigger": true
+            "IsTrigger": false
+          }
+        },
+        {
+          "TypeName": "Rigidbody3D",
+          "Enabled": true,
+          "Properties": {
+            "Mass": 1,
+            "UseGravity": false,
+            "IsKinematic": true,
+            "Drag": 0,
+            "AngularDrag": 0.05,
+            "FreezePositionX": false,
+            "FreezePositionY": false,
+            "FreezePositionZ": false,
+            "FreezeRotationX": false,
+            "FreezeRotationY": false,
+            "FreezeRotationZ": false,
+            "CollisionDetection": "Discrete"
           }
         }
       ],
@@ -113,11 +131,11 @@
       "Position": [
         -0.048000067,
         0,
-        3.8224711
+        4.0144763
       ],
       "Rotation": [
         0,
-        0,
+        6.2799997,
         0
       ],
       "Scale": [
@@ -139,20 +157,69 @@
             "BackgroundG": 0.1,
             "BackgroundB": 0.1
           }
-        },
+        }
+      ],
+      "Children": []
+    },
+    {
+      "InstanceId": 4,
+      "Name": "Cube",
+      "ActiveSelf": true,
+      "Tag": "Untagged",
+      "Layer": "Default",
+      "Position": [
+        0,
+        -1.8719996,
+        0
+      ],
+      "Rotation": [
+        0,
+        0,
+        0
+      ],
+      "Scale": [
+        17.46,
+        0.82,
+        15.959999
+      ],
+      "Components": [
         {
-          "TypeName": "RaycastDiagnostic",
+          "TypeName": "MeshFilter",
           "Enabled": true,
           "Properties": {
-            "rayLength": 20
+            "MeshPath": "",
+            "MeshName": "Cube"
           }
         },
         {
-          "TypeName": "NewScript",
+          "TypeName": "MeshRenderer",
           "Enabled": true,
           "Properties": {
-            "speed": 5,
-            "active": true
+            "MaterialPath": "",
+            "CastShadows": true,
+            "ReceiveShadows": true,
+            "AlbedoR": 0.8,
+            "AlbedoG": 0.82,
+            "AlbedoB": 0.85,
+            "Metallic": 0,
+            "Roughness": 0.6
+          }
+        },
+        {
+          "TypeName": "BoxCollider",
+          "Enabled": true,
+          "Properties": {
+            "Center": [
+              0,
+              -2.28,
+              0
+            ],
+            "Size": [
+              1,
+              1,
+              1
+            ],
+            "IsTrigger": false
           }
         }
       ],

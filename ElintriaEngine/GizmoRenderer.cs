@@ -9,12 +9,20 @@ namespace ElintriaEngine.Rendering
 {
     /// <summary>
     /// Draws scene-space gizmo overlays and transform handles via raw GL lines.
-    /// All coordinates passed to Render() must be UI-space (top-left origin).
-    /// WorldToScreen() converts world positions to UI-space screen coords — matching
-    /// mouse coordinates from the windowing system so hit-testing works correctly.
     ///
-    /// This renderer also draws all pending <see cref="PhysicsDebug"/> rays/lines
-    /// each frame, exactly like Unity's Gizmos system does for Debug.DrawRay.
+    /// KEY RULE — world-space point from a local offset:
+    ///
+    ///   worldPoint = LocalPosition + Quaternion.Rotate(localOffset * LocalScale)
+    ///
+    /// We do NOT use Tr(LocalMatrix, point) for collider centers because
+    /// OpenTK's LocalMatrix = CreateScale * CreateRotation * CreateTranslation
+    /// causes the translation to be multiplied by scale, giving a wrong result.
+    ///
+    /// Use the helper:
+    ///   LocalToWorld(go, localOffset)
+    ///     = go.LocalPosition + RotateByGO(go, localOffset * go.LocalScale)
+    ///
+    /// Camera frustum corners use LocalPosition + Rotate(corner) — same rule.
     /// </summary>
     public class GizmoRenderer : IDisposable
     {
@@ -32,15 +40,11 @@ namespace ElintriaEngine.Rendering
         public GameObject? HandleTarget { get; set; }
 
         // ── Collider edit mode ────────────────────────────────────────────────
-        /// <summary>When true, face-drag handles are drawn instead of transform handles.</summary>
         public bool ColliderEditMode { get; set; } = false;
 
-        // Collider handle: each face of a box/sphere/capsule gets a dot handle.
-        // Axis: 0=+X 1=-X 2=+Y 3=-Y 4=+Z 5=-Z  (for sphere/capsule: 0=+R)
         public struct ColliderHandle { public Vector2 ScreenPos; public int Axis; }
         public readonly List<ColliderHandle> ColliderHandles = new();
 
-        // ── Axis handles (screen-space tips, rebuilt each Render call) ────────
         public struct AxisHandle { public Vector2 ScreenTip; public int Axis; public float ShaftLength; }
         public readonly List<AxisHandle> LastHandles = new();
 
@@ -100,9 +104,9 @@ void main(){ FragColor = uColor; }";
             GL.Enable(EnableCap.Blend);
             GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 
-            DrawDebugLines(view, proj, vpMat, depthPass: false);
+            DrawDebugLines(vpMat, depthPass: false);
             GL.Enable(EnableCap.DepthTest);
-            DrawDebugLines(view, proj, vpMat, depthPass: true);
+            DrawDebugLines(vpMat, depthPass: true);
             GL.Disable(EnableCap.DepthTest);
 
             foreach (var go in scene.All())
@@ -110,14 +114,14 @@ void main(){ FragColor = uColor; }";
                 if (!go.ActiveSelf) continue;
 
                 if (ShowCameras && go.GetComponent<Camera>() != null)
-                    DrawCameraGizmo(vpMat, view, proj, go, camPos, viewport);
+                    DrawCameraGizmo(vpMat, go, camPos, viewport);
 
                 if (ShowLights)
                 {
                     if (go.GetComponent<DirectionalLight>() != null)
-                        DrawDirectionalLightGizmo(vpMat, go, camPos, viewport);
+                        DrawDirectionalLightGizmo(vpMat, go, camPos);
                     if (go.GetComponent<SpotLight>() != null)
-                        DrawSpotLightGizmo(vpMat, go, camPos, viewport);
+                        DrawSpotLightGizmo(vpMat, go, camPos);
                 }
 
                 if (ShowColliders)
@@ -125,37 +129,26 @@ void main(){ FragColor = uColor; }";
                     if (go.GetComponent<BoxCollider>() is BoxCollider bc)
                     {
                         var tint = (ColliderEditMode && HandleTarget == go) ? CCoEdit : CCo;
-                        DrawBoxWire(vpMat, go, bc.Center, bc.Size, tint);
+                        DrawBoxCollider(vpMat, go, bc, tint);
                     }
                     if (go.GetComponent<SphereCollider>() is SphereCollider sc)
                     {
                         var tint = (ColliderEditMode && HandleTarget == go) ? CCoEdit : CCo;
-                        // FIX: run center through the full LocalMatrix so the gizmo
-                        // follows the GO's position, rotation, and scale.
-                        var wc = Tr(go.Transform.LocalMatrix, sc.Center);
-                        float r = sc.Radius * MaxScale(go);
-                        DrawCircleRing(vpMat, wc, r, tint);
-                        DrawCircleRingAxis(vpMat, wc, r, tint, 0);
-                        DrawCircleRingAxis(vpMat, wc, r, tint, 2);
+                        DrawSphereCollider(vpMat, go, sc, tint);
                     }
                     if (go.GetComponent<CapsuleCollider>() is CapsuleCollider cap)
                     {
                         var tint = (ColliderEditMode && HandleTarget == go) ? CCoEdit : CCo;
-                        DrawCapsuleWire(vpMat, go, cap, tint);
+                        DrawCapsuleCollider(vpMat, go, cap, tint);
                     }
                     if (go.GetComponent<BoxCollider2D>() is BoxCollider2D bc2)
-                    {
-                        var s = new Vector3(bc2.Width, bc2.Height, 0.02f);
-                        DrawBoxWire(vpMat, go, bc2.Offset, s, CCo);
-                    }
+                        DrawBoxCollider2D(vpMat, go, bc2, CCo);
                     if (go.GetComponent<CircleCollider2D>() is CircleCollider2D cc2)
-                    {
-                        // FIX: same as sphere — use matrix instead of raw LocalPosition
-                        var wc = Tr(go.Transform.LocalMatrix, cc2.Offset);
-                        DrawCircleRing(vpMat, wc, cc2.Radius, CCo);
-                    }
+                        DrawCircleCollider2D(vpMat, go, cc2, CCo);
                     if (go.GetComponent<MeshCollider>() is MeshCollider mc)
-                        DrawBoxWire(vpMat, go, Vector3.Zero, Vector3.One, Color4TintedCCo(mc.IsTrigger));
+                        DrawBoxCollider(vpMat, go,
+                            new BoxCollider { Center = Vector3.Zero, Size = Vector3.One },
+                            Color4TintedCCo(mc.IsTrigger));
                 }
 
                 if (ShowAudio && go.GetComponent<AudioSource>() != null)
@@ -175,12 +168,11 @@ void main(){ FragColor = uColor; }";
 
             GL.Disable(EnableCap.Blend);
             GL.Enable(EnableCap.DepthTest);
-
             PhysicsDebug.FlushSingleFrame();
         }
 
-        // ── PhysicsDebug line rendering ───────────────────────────────────────
-        private void DrawDebugLines(Matrix4 view, Matrix4 proj, Matrix4 vpMat, bool depthPass)
+        // ── PhysicsDebug lines ────────────────────────────────────────────────
+        private void DrawDebugLines(Matrix4 vpMat, bool depthPass)
         {
             var lines = PhysicsDebug.Lines;
             if (lines.Count == 0) return;
@@ -191,9 +183,170 @@ void main(){ FragColor = uColor; }";
             }
         }
 
-        // ── Camera — frustum wireframe ────────────────────────────────────────
-        private void DrawCameraGizmo(Matrix4 vpMat, Matrix4 view, Matrix4 proj,
-            GameObject go, Vector3 camPos, RectangleF viewport)
+        // ═════════════════════════════════════════════════════════════════════
+        //  World-space transform helpers
+        //
+        //  LocalToWorld(go, localOffset):
+        //    Converts a LOCAL-SPACE point (expressed relative to the GO's pivot)
+        //    into WORLD-SPACE, correctly applying position + rotation + scale.
+        //
+        //    Formula:  worldPos = go.LocalPosition + Rotate(localOffset * go.LocalScale)
+        //
+        //    Do NOT use Tr(LocalMatrix, point) — OpenTK's LocalMatrix =
+        //    Scale*Rotate*Translate causes the translation to be pre-multiplied
+        //    by scale, producing wrong world positions.
+        // ═════════════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// Converts a local-space offset into world space using
+        /// position + rotation(offset * scale).
+        /// This is the correct formula for placing collider gizmos in world space.
+        /// </summary>
+        private static Vector3 LocalToWorld(GameObject go, Vector3 localOffset)
+        {
+            var t = go.Transform;
+            var scaled = localOffset * t.LocalScale;
+            var rotated = Vector3.Transform(scaled, GetRotation(t));
+            return t.LocalPosition + rotated;
+        }
+
+        /// <summary>
+        /// Returns the world-space rotation quaternion from the transform's Euler angles.
+        /// </summary>
+        private static Quaternion GetRotation(Transform t)
+            => Quaternion.FromEulerAngles(
+                MathHelper.DegreesToRadians(t.LocalEulerAngles.X),
+                MathHelper.DegreesToRadians(t.LocalEulerAngles.Y),
+                MathHelper.DegreesToRadians(t.LocalEulerAngles.Z));
+
+        /// <summary>
+        /// Rotates a direction vector by the GO's rotation only (no scale, no translation).
+        /// Used for axis directions on collider handles.
+        /// </summary>
+        private static Vector3 RotateDir(GameObject go, Vector3 dir)
+            => Vector3.Transform(dir, GetRotation(go.Transform));
+
+        // ═════════════════════════════════════════════════════════════════════
+        //  Collider gizmo drawing
+        //  All use LocalToWorld so the gizmo always sits exactly on the GO.
+        // ═════════════════════════════════════════════════════════════════════
+
+        // ── BoxCollider ───────────────────────────────────────────────────────
+        private void DrawBoxCollider(Matrix4 vpMat, GameObject go,
+                                     BoxCollider bc, Vector4 color)
+        {
+            var t = go.Transform;
+            var scale = t.LocalScale;
+            var rot = GetRotation(t);
+            var worldCenter = LocalToWorld(go, bc.Center);
+            var half = bc.Size * 0.5f * scale;
+
+            // Eight corners in local space relative to collider center, then rotate
+            var c = new Vector3[8];
+            int i = 0;
+            for (int sx = -1; sx <= 1; sx += 2)
+                for (int sy = -1; sy <= 1; sy += 2)
+                    for (int sz = -1; sz <= 1; sz += 2)
+                    {
+                        var local = new Vector3(sx * half.X, sy * half.Y, sz * half.Z);
+                        c[i++] = worldCenter + Vector3.Transform(local, rot);
+                    }
+
+            Lines(vpMat, color, 1f,
+                c[0], c[1], c[0], c[2], c[0], c[4],
+                c[7], c[6], c[7], c[5], c[7], c[3],
+                c[1], c[3], c[1], c[5],
+                c[2], c[6], c[2], c[3]);
+            Lines(vpMat, color, 1f,
+                c[0], c[1], c[1], c[3], c[3], c[2], c[2], c[0],
+                c[4], c[5], c[5], c[7], c[7], c[6], c[6], c[4],
+                c[0], c[4], c[1], c[5], c[2], c[6], c[3], c[7]);
+        }
+
+        // ── SphereCollider ────────────────────────────────────────────────────
+        private void DrawSphereCollider(Matrix4 vpMat, GameObject go,
+                                        SphereCollider sc, Vector4 color)
+        {
+            var worldCenter = LocalToWorld(go, sc.Center);
+            float r = sc.Radius * MaxScale(go);
+            DrawCircleRing(vpMat, worldCenter, r, color);
+            DrawCircleRingAxis(vpMat, worldCenter, r, color, 0);
+            DrawCircleRingAxis(vpMat, worldCenter, r, color, 2);
+        }
+
+        // ── CapsuleCollider ───────────────────────────────────────────────────
+        private void DrawCapsuleCollider(Matrix4 vpMat, GameObject go,
+                                         CapsuleCollider cap, Vector4 color)
+        {
+            var t = go.Transform;
+            var scale = t.LocalScale;
+            var worldCenter = LocalToWorld(go, cap.Center);
+            float r = cap.Radius * Math.Max(scale.X, scale.Z);
+            float h = Math.Max(0f, cap.Height * 0.5f * scale.Y - r);
+
+            DrawCircleRing(vpMat, worldCenter + Vector3.UnitY * h, r, color);
+            DrawCircleRing(vpMat, worldCenter - Vector3.UnitY * h, r, color);
+            Lines(vpMat, color, 1f,
+                worldCenter + new Vector3(r, h, 0), worldCenter + new Vector3(r, -h, 0),
+                worldCenter + new Vector3(-r, h, 0), worldCenter + new Vector3(-r, -h, 0),
+                worldCenter + new Vector3(0, h, r), worldCenter + new Vector3(0, -h, r),
+                worldCenter + new Vector3(0, h, -r), worldCenter + new Vector3(0, -h, -r));
+        }
+
+        // ── BoxCollider2D ─────────────────────────────────────────────────────
+        private void DrawBoxCollider2D(Matrix4 vpMat, GameObject go,
+                                       BoxCollider2D bc2, Vector4 color)
+        {
+            var fakeBox = new BoxCollider
+            {
+                Center = bc2.Offset,
+                Size = new Vector3(bc2.Width, bc2.Height, 0.02f)
+            };
+            DrawBoxCollider(vpMat, go, fakeBox, color);
+        }
+
+        // ── CircleCollider2D ──────────────────────────────────────────────────
+        private void DrawCircleCollider2D(Matrix4 vpMat, GameObject go,
+                                          CircleCollider2D cc2, Vector4 color)
+        {
+            var worldCenter = LocalToWorld(go, cc2.Offset);
+            DrawCircleRing(vpMat, worldCenter, cc2.Radius, color);
+        }
+
+        // ── Circle ring helpers ───────────────────────────────────────────────
+        // These receive an already world-transformed center.
+        private void DrawCircleRing(Matrix4 vpMat, Vector3 center, float radius, Vector4 color)
+        {
+            int n = 24;
+            var pts = new Vector3[n];
+            for (int i = 0; i < n; i++)
+            {
+                float a = i * MathF.PI * 2f / n;
+                pts[i] = center + new Vector3(MathF.Cos(a) * radius, 0, MathF.Sin(a) * radius);
+            }
+            for (int i = 0; i < n; i++)
+                Lines(vpMat, color, 1f, pts[i], pts[(i + 1) % n]);
+        }
+
+        private void DrawCircleRingAxis(Matrix4 vpMat, Vector3 center, float radius,
+                                        Vector4 color, int axis)
+        {
+            int n = 24;
+            var pts = new Vector3[n];
+            for (int i = 0; i < n; i++)
+            {
+                float a = i * MathF.PI * 2f / n;
+                pts[i] = axis == 2
+                    ? center + new Vector3(MathF.Cos(a) * radius, MathF.Sin(a) * radius, 0)
+                    : center + new Vector3(0, MathF.Cos(a) * radius, MathF.Sin(a) * radius);
+            }
+            for (int i = 0; i < n; i++)
+                Lines(vpMat, color, 1f, pts[i], pts[(i + 1) % n]);
+        }
+
+        // ── Camera frustum wireframe ──────────────────────────────────────────
+        private void DrawCameraGizmo(Matrix4 vpMat, GameObject go,
+                                     Vector3 camPos, RectangleF viewport)
         {
             var cam = go.GetComponent<Camera>()!;
             float fov = MathHelper.DegreesToRadians(cam.FieldOfView);
@@ -203,26 +356,30 @@ void main(){ FragColor = uColor; }";
 
             float hn = MathF.Tan(fov * .5f) * near, wn = hn * asp;
             float hf = MathF.Tan(fov * .5f) * far, wf = hf * asp;
-            var m = go.Transform.LocalMatrix;
+
+            // Frustum corners are in view space (no object scale applied).
+            // Use LocalPosition + Rotate(corner) — NOT LocalMatrix, which would
+            // multiply the translation by scale and misplace the gizmo.
+            var pos = go.Transform.LocalPosition;
+            var rot = GetRotation(go.Transform);
+            Vector3 W(Vector3 v) => pos + Vector3.Transform(v, rot);
 
             Vector3[] p =
             {
-                Tr(m, new(-wn,-hn,-near)), Tr(m, new(wn,-hn,-near)),
-                Tr(m, new( wn, hn,-near)), Tr(m, new(-wn, hn,-near)),
-                Tr(m, new(-wf,-hf,-far)),  Tr(m, new(wf,-hf,-far)),
-                Tr(m, new( wf, hf,-far)),  Tr(m, new(-wf, hf,-far)),
+                W(new(-wn,-hn,-near)), W(new(wn,-hn,-near)),
+                W(new( wn, hn,-near)), W(new(-wn, hn,-near)),
+                W(new(-wf,-hf,-far)),  W(new(wf,-hf,-far)),
+                W(new( wf, hf,-far)),  W(new(-wf, hf,-far)),
             };
             Lines(vpMat, CCam, 1.5f,
                 p[0], p[1], p[1], p[2], p[2], p[3], p[3], p[0],
                 p[4], p[5], p[5], p[6], p[6], p[7], p[7], p[4],
                 p[0], p[4], p[1], p[5], p[2], p[6], p[3], p[7]);
-
-            DrawCrossIcon(vpMat, go.Transform.LocalPosition, CCam, camPos);
+            DrawCrossIcon(vpMat, pos, CCam, camPos);
         }
 
-        // ── Directional light — sun disc + radial rays ────────────────────────
-        private void DrawDirectionalLightGizmo(Matrix4 vpMat, GameObject go,
-                                               Vector3 camPos, RectangleF viewport)
+        // ── Directional light ─────────────────────────────────────────────────
+        private void DrawDirectionalLightGizmo(Matrix4 vpMat, GameObject go, Vector3 camPos)
         {
             var dl = go.GetComponent<DirectionalLight>()!;
             var dir = dl.Direction.Normalized();
@@ -242,7 +399,6 @@ void main(){ FragColor = uColor; }";
             }
             for (int i = 0; i < n; i++)
                 Lines(vpMat, CDL, 2f, ring[i], ring[(i + 1) % n]);
-
             for (int i = 0; i < 8; i++)
             {
                 float a = i * MathF.PI * 2f / 8;
@@ -252,9 +408,8 @@ void main(){ FragColor = uColor; }";
             DrawCrossIcon(vpMat, pos, CDL, camPos);
         }
 
-        // ── Spotlight — cone outline with inner ring + shaft ──────────────────
-        private void DrawSpotLightGizmo(Matrix4 vpMat, GameObject go,
-                                        Vector3 camPos, RectangleF viewport)
+        // ── Spotlight ─────────────────────────────────────────────────────────
+        private void DrawSpotLightGizmo(Matrix4 vpMat, GameObject go, Vector3 camPos)
         {
             var sl = go.GetComponent<SpotLight>()!;
             var dir = sl.Direction.Normalized();
@@ -276,9 +431,7 @@ void main(){ FragColor = uColor; }";
             }
             for (int i = 0; i < n; i++)
                 Lines(vpMat, CSL, 1.5f, ring[i], ring[(i + 1) % n]);
-
-            Lines(vpMat, CSL, 2f,
-                pos, ring[0], pos, ring[n / 4], pos, ring[n / 2], pos, ring[3 * n / 4]);
+            Lines(vpMat, CSL, 2f, pos, ring[0], pos, ring[n / 4], pos, ring[n / 2], pos, ring[3 * n / 4]);
 
             float innerR = sl.Range * 0.4f * MathF.Tan(MathHelper.DegreesToRadians(sl.SpotAngle));
             var innerTip = pos + dir * sl.Range * 0.4f;
@@ -292,85 +445,7 @@ void main(){ FragColor = uColor; }";
             for (int i = 0; i < ni; i++)
                 Lines(vpMat, new Vector4(CSL.X, CSL.Y, CSL.Z, 0.4f), 1f,
                     iRing[i], iRing[(i + 1) % ni]);
-
             DrawCrossIcon(vpMat, pos, CSL, camPos);
-        }
-
-        // ── Box collider wireframe ────────────────────────────────────────────
-        // Uses Tr(LocalMatrix, ...) so the box always follows the GO correctly.
-        private void DrawBoxWire(Matrix4 vpMat, GameObject go,
-                                 Vector3 center, Vector3 size, Vector4 color)
-        {
-            var m = go.Transform.LocalMatrix;
-            var h = size * .5f;
-            var c = new Vector3[8];
-            int i = 0;
-            for (int sx = -1; sx <= 1; sx += 2)
-                for (int sy = -1; sy <= 1; sy += 2)
-                    for (int sz = -1; sz <= 1; sz += 2)
-                        c[i++] = Tr(m, center + new Vector3(sx * h.X, sy * h.Y, sz * h.Z));
-            Lines(vpMat, color, 1f,
-                c[0], c[1], c[0], c[2], c[0], c[4],
-                c[7], c[6], c[7], c[5], c[7], c[3],
-                c[1], c[3], c[1], c[5],
-                c[2], c[6], c[2], c[3]);
-            Lines(vpMat, color, 1f,
-                c[0], c[1], c[1], c[3], c[3], c[2], c[2], c[0],
-                c[4], c[5], c[5], c[7], c[7], c[6], c[6], c[4],
-                c[0], c[4], c[1], c[5], c[2], c[6], c[3], c[7]);
-        }
-
-        // ── Circle ring helpers ───────────────────────────────────────────────
-        // These receive an already world-transformed center — callers must run
-        // the local center through Tr(LocalMatrix, ...) before passing it in.
-        private void DrawCircleRing(Matrix4 vpMat, Vector3 center, float radius, Vector4 color)
-        {
-            int n = 20;
-            var pts = new Vector3[n];
-            for (int i = 0; i < n; i++)
-            {
-                float a = i * MathF.PI * 2f / n;
-                pts[i] = center + new Vector3(MathF.Cos(a) * radius, 0, MathF.Sin(a) * radius);
-            }
-            for (int i = 0; i < n; i++)
-                Lines(vpMat, color, 1f, pts[i], pts[(i + 1) % n]);
-        }
-
-        private void DrawCircleRingAxis(Matrix4 vpMat, Vector3 center, float radius,
-                                        Vector4 color, int axis)
-        {
-            int n = 20;
-            var pts = new Vector3[n];
-            for (int i = 0; i < n; i++)
-            {
-                float a = i * MathF.PI * 2f / n;
-                pts[i] = axis == 2
-                    ? center + new Vector3(MathF.Cos(a) * radius, MathF.Sin(a) * radius, 0)
-                    : center + new Vector3(0, MathF.Cos(a) * radius, MathF.Sin(a) * radius);
-            }
-            for (int i = 0; i < n; i++)
-                Lines(vpMat, color, 1f, pts[i], pts[(i + 1) % n]);
-        }
-
-        // ── Capsule wireframe ─────────────────────────────────────────────────
-        private void DrawCapsuleWire(Matrix4 vpMat, GameObject go,
-                                     CapsuleCollider cap, Vector4 color)
-        {
-            // FIX: transform center through the full LocalMatrix so the capsule
-            // gizmo follows position, rotation, and scale.
-            var m = go.Transform.LocalMatrix;
-            var pos = Tr(m, cap.Center);
-            var scale = go.Transform.LocalScale;
-            float r = cap.Radius * Math.Max(scale.X, scale.Z);
-            float h = Math.Max(0f, cap.Height * 0.5f * scale.Y - r);
-
-            DrawCircleRing(vpMat, pos + Vector3.UnitY * h, r, color);
-            DrawCircleRing(vpMat, pos - Vector3.UnitY * h, r, color);
-            Lines(vpMat, color, 1f,
-                pos + new Vector3(r, h, 0), pos + new Vector3(r, -h, 0),
-                pos + new Vector3(-r, h, 0), pos + new Vector3(-r, -h, 0),
-                pos + new Vector3(0, h, r), pos + new Vector3(0, -h, r),
-                pos + new Vector3(0, h, -r), pos + new Vector3(0, -h, -r));
         }
 
         // ── Collider face-drag edit handles ───────────────────────────────────
@@ -378,37 +453,35 @@ void main(){ FragColor = uColor; }";
                                              GameObject go, RectangleF viewport)
         {
             ColliderHandles.Clear();
-            var m = go.Transform.LocalMatrix;
 
             if (go.GetComponent<BoxCollider>() is BoxCollider bc)
             {
-                // FIX: center and all face handle positions go through LocalMatrix
-                var c = Tr(m, bc.Center);
+                var worldCenter = LocalToWorld(go, bc.Center);
+                var scale = go.Transform.LocalScale;
                 var faces = new (Vector3 fp, int axis)[]
                 {
-                    (Tr(m, bc.Center + Vector3.UnitX * (bc.Size.X * 0.5f)), 0),
-                    (Tr(m, bc.Center - Vector3.UnitX * (bc.Size.X * 0.5f)), 1),
-                    (Tr(m, bc.Center + Vector3.UnitY * (bc.Size.Y * 0.5f)), 2),
-                    (Tr(m, bc.Center - Vector3.UnitY * (bc.Size.Y * 0.5f)), 3),
-                    (Tr(m, bc.Center + Vector3.UnitZ * (bc.Size.Z * 0.5f)), 4),
-                    (Tr(m, bc.Center - Vector3.UnitZ * (bc.Size.Z * 0.5f)), 5),
+                    (LocalToWorld(go, bc.Center + Vector3.UnitX * (bc.Size.X * 0.5f)), 0),
+                    (LocalToWorld(go, bc.Center - Vector3.UnitX * (bc.Size.X * 0.5f)), 1),
+                    (LocalToWorld(go, bc.Center + Vector3.UnitY * (bc.Size.Y * 0.5f)), 2),
+                    (LocalToWorld(go, bc.Center - Vector3.UnitY * (bc.Size.Y * 0.5f)), 3),
+                    (LocalToWorld(go, bc.Center + Vector3.UnitZ * (bc.Size.Z * 0.5f)), 4),
+                    (LocalToWorld(go, bc.Center - Vector3.UnitZ * (bc.Size.Z * 0.5f)), 5),
                 };
                 foreach (var (fp, ax) in faces)
                 {
-                    Lines(vpMat, CCoEdit, 2f, c, fp);
+                    Lines(vpMat, CCoEdit, 2f, worldCenter, fp);
                     ColliderHandles.Add(new ColliderHandle
                     {
-                        ScreenPos = WorldToScreen(fp, vpMat, proj, viewport),
+                        ScreenPos = WorldToScreen(fp, view, proj, viewport),
                         Axis = ax
                     });
-                    DrawDotHandle(vpMat, fp, CCoEdit, viewport);
+                    DrawDotHandle(vpMat, fp);
                 }
-                DrawBoxWire(vpMat, go, bc.Center, bc.Size, CCoEdit);
+                DrawBoxCollider(vpMat, go, bc, CCoEdit);
             }
             else if (go.GetComponent<SphereCollider>() is SphereCollider sc)
             {
-                // FIX: center through matrix
-                var c = Tr(m, sc.Center);
+                var worldCenter = LocalToWorld(go, sc.Center);
                 float r = sc.Radius * MaxScale(go);
                 var axes = new (Vector3 dir, int ax)[]
                 {
@@ -418,50 +491,48 @@ void main(){ FragColor = uColor; }";
                 };
                 foreach (var (dir, ax) in axes)
                 {
-                    var fp = c + dir * r;
-                    Lines(vpMat, CCoEdit, 1f, c, fp);
+                    var fp = worldCenter + dir * r;
+                    Lines(vpMat, CCoEdit, 1f, worldCenter, fp);
                     ColliderHandles.Add(new ColliderHandle
                     {
-                        ScreenPos = WorldToScreen(fp, vpMat, proj, viewport),
+                        ScreenPos = WorldToScreen(fp, view, proj, viewport),
                         Axis = ax
                     });
-                    DrawDotHandle(vpMat, fp, CCoEdit, viewport);
+                    DrawDotHandle(vpMat, fp);
                 }
-                DrawCircleRing(vpMat, c, r, CCoEdit);
-                DrawCircleRingAxis(vpMat, c, r, CCoEdit, 2);
+                DrawCircleRing(vpMat, worldCenter, r, CCoEdit);
+                DrawCircleRingAxis(vpMat, worldCenter, r, CCoEdit, 2);
             }
             else if (go.GetComponent<CapsuleCollider>() is CapsuleCollider cap)
             {
-                // FIX: center through matrix, scale applied properly
-                var c = Tr(m, cap.Center);
                 var scale = go.Transform.LocalScale;
+                var worldCenter = LocalToWorld(go, cap.Center);
                 float r = cap.Radius * Math.Max(scale.X, scale.Z);
                 float h = cap.Height * 0.5f * scale.Y;
                 var handles = new (Vector3 p, int ax)[]
                 {
-                    (c + Vector3.UnitX * r, 0),
-                    (c + Vector3.UnitY * h, 2),
-                    (c - Vector3.UnitY * h, 3),
+                    (worldCenter + Vector3.UnitX * r, 0),
+                    (worldCenter + Vector3.UnitY * h, 2),
+                    (worldCenter - Vector3.UnitY * h, 3),
                 };
                 foreach (var (fp, ax) in handles)
                 {
-                    Lines(vpMat, CCoEdit, 1f, c, fp);
+                    Lines(vpMat, CCoEdit, 1f, worldCenter, fp);
                     ColliderHandles.Add(new ColliderHandle
                     {
-                        ScreenPos = WorldToScreen(fp, vpMat, proj, viewport),
+                        ScreenPos = WorldToScreen(fp, view, proj, viewport),
                         Axis = ax
                     });
-                    DrawDotHandle(vpMat, fp, CCoEdit, viewport);
+                    DrawDotHandle(vpMat, fp);
                 }
-                DrawCapsuleWire(vpMat, go, cap, CCoEdit);
+                DrawCapsuleCollider(vpMat, go, cap, CCoEdit);
             }
         }
 
-        private void DrawDotHandle(Matrix4 vpMat, Vector3 worldPos,
-                                   Vector4 color, RectangleF viewport)
+        private void DrawDotHandle(Matrix4 vpMat, Vector3 worldPos)
         {
             float s = 0.06f;
-            Lines(vpMat, color, 3f,
+            Lines(vpMat, CCoEdit, 3f,
                 worldPos - Vector3.UnitX * s, worldPos + Vector3.UnitX * s,
                 worldPos - Vector3.UnitY * s, worldPos + Vector3.UnitY * s,
                 worldPos - Vector3.UnitZ * s, worldPos + Vector3.UnitZ * s);
@@ -470,7 +541,7 @@ void main(){ FragColor = uColor; }";
         private static Vector4 Color4TintedCCo(bool trigger) =>
             trigger ? new Vector4(0.8f, 0.4f, 0.1f, 1f) : new Vector4(0.25f, 0.85f, 0.85f, 1f);
 
-        // ── Small cross icon at a world position ──────────────────────────────
+        // ── Cross icon ────────────────────────────────────────────────────────
         private void DrawCrossIcon(Matrix4 vpMat, Vector3 pos, Vector4 color, Vector3 camPos)
         {
             float s = Math.Clamp((camPos - pos).Length * 0.06f, 0.06f, 1.2f);
@@ -480,7 +551,7 @@ void main(){ FragColor = uColor; }";
                 pos - Vector3.UnitZ * s, pos + Vector3.UnitZ * s);
         }
 
-        // ── Move handles — coloured arrows + XZ square ────────────────────────
+        // ── Move handles ──────────────────────────────────────────────────────
         private void DrawMoveHandles(Matrix4 vpMat, Matrix4 view, Matrix4 proj,
                                      Vector3 camPos, RectangleF viewport)
         {
@@ -488,7 +559,6 @@ void main(){ FragColor = uColor; }";
             var pos = HandleTarget.Transform.LocalPosition;
             float dist = Math.Max((camPos - pos).Length, 0.1f);
             float scale = dist * 0.20f;
-
             LastHandles.Clear();
 
             var axDefs = new (Vector3 dir, Vector4 col, int axis)[]
@@ -502,7 +572,6 @@ void main(){ FragColor = uColor; }";
             {
                 var tip = pos + dir * scale;
                 var back = dir * (scale * 0.20f);
-
                 Lines(vpMat, col, 3f, pos, tip);
 
                 var perp = Vector3.Cross(dir, Vector3.UnitY);
@@ -532,14 +601,13 @@ void main(){ FragColor = uColor; }";
                 pos + Vector3.UnitX * ps * 0.4f + Vector3.UnitZ * ps * 0.4f);
             LastHandles.Add(new AxisHandle
             {
-                ScreenTip = WorldToScreen(
-                    pos + (Vector3.UnitX + Vector3.UnitZ).Normalized() * ps * 0.7f,
+                ScreenTip = WorldToScreen(pos + (Vector3.UnitX + Vector3.UnitZ).Normalized() * ps * 0.7f,
                     view, proj, viewport),
                 Axis = 3
             });
         }
 
-        // ── Rotate handles — three rings ──────────────────────────────────────
+        // ── Rotate handles ────────────────────────────────────────────────────
         private void DrawRotateHandles(Matrix4 vpMat, Matrix4 view, Matrix4 proj,
                                        Vector3 camPos, RectangleF viewport)
         {
@@ -548,7 +616,6 @@ void main(){ FragColor = uColor; }";
             float dist = Math.Max((camPos - pos).Length, 0.1f);
             float r = dist * 0.20f;
             int n = 48;
-
             LastHandles.Clear();
 
             void Ring(Vector3 a1, Vector3 a2, Vector4 col, int axis)
@@ -561,7 +628,6 @@ void main(){ FragColor = uColor; }";
                 }
                 for (int i = 0; i < n; i++)
                     Lines(vpMat, col, 2.5f, pts[i], pts[(i + 1) % n]);
-
                 LastHandles.Add(new AxisHandle { ScreenTip = WorldToScreen(pos + a1 * r, view, proj, viewport), Axis = axis });
                 LastHandles.Add(new AxisHandle { ScreenTip = WorldToScreen(pos - a1 * r, view, proj, viewport), Axis = axis });
                 LastHandles.Add(new AxisHandle { ScreenTip = WorldToScreen(pos + a2 * r, view, proj, viewport), Axis = axis });
@@ -585,7 +651,6 @@ void main(){ FragColor = uColor; }";
             GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
             GL.BufferData(BufferTarget.ArrayBuffer, data.Length * sizeof(float),
                           data, BufferUsageHint.DynamicDraw);
-
             _shader.Use();
             GL.UniformMatrix4(GL.GetUniformLocation(_shader.Program, "uVP"), false, ref vpMat);
             GL.Uniform4(GL.GetUniformLocation(_shader.Program, "uColor"),
@@ -597,21 +662,20 @@ void main(){ FragColor = uColor; }";
 
         // ── Helpers ───────────────────────────────────────────────────────────
 
-        /// <summary>Transforms a local-space point into world space via the GO's LocalMatrix.</summary>
-        private static Vector3 Tr(Matrix4 m, Vector3 v)
+        /// <summary>
+        /// Transforms a local-space point through a 4x4 matrix (column-vector convention).
+        /// Only used for camera frustum corners which are expressed in camera local space.
+        /// Do NOT use this for collider centers — use LocalToWorld() instead.
+        /// </summary>
+        private static Vector3 TrMatrix(Matrix4 m, Vector3 v)
             => (m * new Vector4(v, 1f)).Xyz;
 
-        /// <summary>Returns the largest scale component (used for uniform sphere radius scaling).</summary>
         private static float MaxScale(GameObject go)
         {
             var s = go.Transform.LocalScale;
             return Math.Max(s.X, Math.Max(s.Y, s.Z));
         }
 
-        /// <summary>
-        /// Converts a world-space point to UI-space screen coordinates (top-left origin).
-        /// The <paramref name="viewport"/> must be in UI space (same origin as mouse events).
-        /// </summary>
         public static Vector2 WorldToScreen(Vector3 world, Matrix4 view, Matrix4 proj, RectangleF viewport)
         {
             var clip = new Vector4(world, 1f) * (view * proj);

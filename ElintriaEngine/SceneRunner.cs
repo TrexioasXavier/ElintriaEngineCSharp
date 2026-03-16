@@ -18,13 +18,15 @@ namespace ElintriaEngine.Core
     //
     //  Every Tick(dt):
     //    4. Bootstrap any components added mid-frame (Awake→OnEnable→OnStart)
-    //    5. OnFixedUpdate() at fixed 50 Hz
-    //    6. OnUpdate(dt)
-    //    7. OnLateUpdate(dt)
+    //    5. PhysicsSimulation.Step() at fixed 50 Hz  ← Rigidbody integration
+    //    6. OnFixedUpdate() at fixed 50 Hz
+    //    7. OnUpdate(dt)
+    //    8. OnLateUpdate(dt)
     //
     //  On Stop():
-    //    8. OnDisable() on all enabled components
-    //    9. OnDestroy() on all components
+    //    9. OnDisable() on all enabled components
+    //   10. OnDestroy() on all components
+    //   11. PhysicsSimulation.ClearAll() — reset velocity/contact state
     // ═══════════════════════════════════════════════════════════════════════════
     public sealed class SceneRunner : IDisposable
     {
@@ -59,10 +61,8 @@ namespace ElintriaEngine.Core
         {
             if (_scene == null || string.IsNullOrEmpty(button.TargetScriptName)) return false;
 
-            // ── Pass 1: find the script as a real component on any active GameObject ──
             foreach (var go in _scene.All())
             {
-                // Use go.Components directly — GetComponents<T>() (plural) doesn't exist on GameObject
                 foreach (var comp in go.Components)
                 {
                     if (comp.GetType().Name != button.TargetScriptName) continue;
@@ -71,17 +71,12 @@ namespace ElintriaEngine.Core
                 }
             }
 
-            // ── Pass 2: script type exists in registry but isn't on any GO yet ──
-            // This happens when the user binds a button to a script that hasn't been
-            // added to a scene object (common during early setup). Create a singleton
-            // instance, attach it to a hidden "UIEventSystem" GO, and invoke.
             var scriptType = ComponentRegistry.TryGetType(button.TargetScriptName);
             if (scriptType != null)
             {
                 Console.WriteLine($"[SceneRunner] Script '{button.TargetScriptName}' not on any GO — " +
                                   $"creating UIEventSystem singleton.");
 
-                // Find-or-create a dedicated UIEventSystem GameObject
                 GameObject? esGo = null;
                 foreach (var go in _scene.All())
                     if (go.Name == "__UIEventSystem__") { esGo = go; break; }
@@ -93,7 +88,6 @@ namespace ElintriaEngine.Core
                     SubscribeGO(esGo);
                 }
 
-                // Add the component if it isn't already there
                 Component? comp = null;
                 foreach (var c in esGo.Components)
                     if (c.GetType().Name == button.TargetScriptName) { comp = c; break; }
@@ -103,12 +97,8 @@ namespace ElintriaEngine.Core
                     comp = ComponentRegistry.Create(button.TargetScriptName);
                     if (comp != null)
                     {
-                        // AddComponent<T>() requires a new() constraint and AddComponentByName
-                        // creates its own instance — neither accepts a pre-built one.
-                        // Attach directly, mirroring what both helpers do internally.
                         comp.GameObject = esGo;
                         esGo.Components.Add(comp);
-                        // Bootstrap the new component
                         SafeCall(comp, "Awake", x => x.Awake());
                         SafeCall(comp, "OnEnable", x => x.OnEnable());
                         SafeCall(comp, "OnStart", x => x.OnStart());
@@ -123,7 +113,6 @@ namespace ElintriaEngine.Core
             return false;
         }
 
-        // Attempt to call a public void method by name on a component. Returns true on success.
         private bool InvokeMethod(Component comp, string methodName)
         {
             if (string.IsNullOrEmpty(methodName)) return false;
@@ -157,9 +146,10 @@ namespace ElintriaEngine.Core
             _fixedAccum = 0;
             _pendingStart.Clear();
 
+            // Clear any leftover physics state from a previous play session
+            PhysicsSimulation.ClearAll();
+
             // Always point Physics at the live scene before any Awake/Start runs.
-            // This must come first so scripts can safely call Physics.Raycast
-            // from Awake() or OnStart().
             Physics.SetScene(scene);
 
             LoadUserScripts(projectRoot);
@@ -209,13 +199,14 @@ namespace ElintriaEngine.Core
             _started = false;
             _scene = null;
 
-            // ── DO NOT call Physics.SetScene(null) here ──────────────────────
-            // EditorLayout.ExitPlayMode() restores the editor scene immediately
-            // after calling Stop(), and will call Physics.SetScene(_savedScene).
-            // Nulling it here would leave a window where Physics has no scene.
-            // ─────────────────────────────────────────────────────────────────
+            // Clear Rigidbody velocity/contact state so the next play session
+            // starts clean (no leftover momentum or stale collision events).
+            PhysicsSimulation.ClearAll();
 
-            PhysicsDebug.Clear();   // remove any lingering debug rays from play mode
+            // DO NOT call Physics.SetScene(null) here — EditorLayout restores
+            // the editor scene immediately after Stop() and calls SetScene itself.
+
+            PhysicsDebug.Clear();
             Stopped?.Invoke();
         }
 
@@ -226,7 +217,6 @@ namespace ElintriaEngine.Core
         {
             if (!_started || IsPaused || _scene == null) return;
 
-            // Advance PhysicsDebug clock so timed DrawRay calls expire correctly
             PhysicsDebug.Tick((float)dt);
 
             FlushPending();
@@ -235,6 +225,13 @@ namespace ElintriaEngine.Core
             while (_fixedAccum >= FixedStep)
             {
                 _fixedAccum -= FixedStep;
+
+                // ── Physics simulation step ───────────────────────────────────
+                // Runs BEFORE OnFixedUpdate so scripts can read already-updated
+                // velocity/position in their OnFixedUpdate, exactly like Unity.
+                PhysicsSimulation.Step(_scene, (float)FixedStep);
+
+                // ── OnFixedUpdate ─────────────────────────────────────────────
                 foreach (var go in _scene.All())
                     if (go.ActiveSelf)
                         foreach (var c in go.Components.ToArray())
@@ -257,20 +254,10 @@ namespace ElintriaEngine.Core
 
         // ─────────────────────────────────────────────────────────────────────
         //  Editor-time script resolution
-        //  Call this after compilation to swap DynamicScript placeholders in
-        //  the live editor scene with real component instances.
-        //  Returns the number of scripts successfully resolved.
         // ─────────────────────────────────────────────────────────────────────
-        // Assembly of built-in engine components — user scripts are in a different assembly.
         private static readonly System.Reflection.Assembly _engineAsm =
             typeof(Component).Assembly;
 
-        /// <summary>
-        /// Replace every DynamicScript placeholder AND every stale real-component instance
-        /// (from a previous compile) with a fresh instance from the current UserAssembly.
-        /// Field values are copied across so the user keeps their edits.
-        /// Call this after every successful script compile.
-        /// </summary>
         public static int ResolveEditorScripts(Scene scene)
         {
             int resolved = 0;
@@ -287,7 +274,6 @@ namespace ElintriaEngine.Core
 
                     if (comp is DynamicScript ds)
                     {
-                        // Case 1: placeholder waiting for first compile
                         typeName = ds.ScriptTypeName;
                         savedValues = ds.FieldValues;
                     }
@@ -295,8 +281,6 @@ namespace ElintriaEngine.Core
                              && comp.GetType().Assembly != _engineAsm
                              && comp.GetType().Assembly != userAsm)
                     {
-                        // Case 2: real component from a PREVIOUS compile's assembly.
-                        // The user has added new fields since then — replace with fresh instance.
                         typeName = comp.GetType().Name;
                         savedValues = CaptureFieldValues(comp);
                     }
@@ -320,7 +304,6 @@ namespace ElintriaEngine.Core
             return resolved;
         }
 
-        /// Reads all public instance fields of a component into a string→value dict.
         private static Dictionary<string, object?> CaptureFieldValues(Component comp)
         {
             var dict = new Dictionary<string, object?>();
@@ -332,7 +315,6 @@ namespace ElintriaEngine.Core
             return dict;
         }
 
-        /// Writes saved values into a freshly-created component instance, coercing types as needed.
         private static void ApplyFieldValues(Component target,
                                              Dictionary<string, object?> values)
         {
@@ -348,16 +330,11 @@ namespace ElintriaEngine.Core
 
         public static void LoadUserScripts(string projectRoot = "")
         {
-            // Look for the newest GameScripts_<timestamp>.dll in the project bin folder.
-            // Every compile produces a uniquely-named DLL (unique AssemblyName) so
-            // Assembly.LoadFrom() never conflicts — no AssemblyLoadContext needed.
             string binDir = string.IsNullOrEmpty(projectRoot)
                 ? AppContext.BaseDirectory
                 : Path.Combine(projectRoot, ".elintria", "Scripts", "bin");
 
             string? dllPath = FindNewestScriptsDll(binDir);
-
-            // Fallback for built-game scenario: DLL next to the exe
             if (dllPath == null)
                 dllPath = FindNewestScriptsDll(AppContext.BaseDirectory);
 
@@ -408,10 +385,10 @@ namespace ElintriaEngine.Core
             return best;
         }
 
+        // ─────────────────────────────────────────────────────────────────────
         //  Helpers
         // ─────────────────────────────────────────────────────────────────────
 
-        /// Replace every DynamicScript placeholder with the real compiled type.
         private void ResolveDynamicScripts()
         {
             if (_scene == null) return;
@@ -472,7 +449,8 @@ namespace ElintriaEngine.Core
             try { fn(c); }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ECS] {phase} error on '{c.GameObject?.Name ?? "?"}' ({c.GetType().Name}): {ex.Message}");
+                Console.WriteLine($"[ECS] {phase} error on '{c.GameObject?.Name ?? "?"}' " +
+                    $"({c.GetType().Name}): {ex.Message}");
             }
         }
 

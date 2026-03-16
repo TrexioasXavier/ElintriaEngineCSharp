@@ -64,7 +64,8 @@ namespace ElintriaEngine.UI.Panels
         private Vector3 _dragCamRight;
         private Vector3 _dragCamForward;
 
-        // ── Collider edit drag ─────────────────────────────────────────────────
+        // ──
+        // edit drag ─────────────────────────────────────────────────
         private bool _colliderDragging;
         private int _colliderDragAxis = -1;
         private const float ColliderHandleRadius = 10f; // px hit radius

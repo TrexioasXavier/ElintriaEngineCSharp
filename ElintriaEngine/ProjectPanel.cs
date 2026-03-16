@@ -57,12 +57,11 @@ namespace ElintriaEngine.UI.Panels
 
         // ── Layout constants ──────────────────────────────────────────────────
         private const float BreadH = 22f;
-        private const float SliderH = 24f;   // bottom toolbar with size slider
+        private const float SliderH = 24f;
         private const float MinScale = 0.5f;
         private const float MaxScale = 3.0f;
-        private float _scale = 1.0f;          // user-controlled size scale
+        private float _scale = 1.0f;
 
-        // Scaled dimensions computed each frame
         private float ListRowH => MathF.Max(16f, 22f * _scale);
         private float TileW => MathF.Max(48f, 68f * _scale);
         private float TileH => TileW + 20f;
@@ -70,15 +69,12 @@ namespace ElintriaEngine.UI.Panels
         private float IconFont => Math.Clamp(8f + (_scale - 1f) * 8f, 7f, 16f);
         private float TextFont => Math.Clamp(8f + (_scale - 1f) * 4f, 7f, 13f);
 
-        // Slider drag state
         private bool _sliderDrag;
         private float _sliderTrackX;
         private float _sliderTrackW;
 
-        // Tile vs list
         private bool _tileView = true;
 
-        // ── Prefab drop highlight ─────────────────────────────────────────────
         public bool PrefabDropHighlight { get; set; }
 
         public ProjectPanel(RectangleF bounds) : base("Project", bounds)
@@ -96,7 +92,6 @@ namespace ElintriaEngine.UI.Panels
         {
             _items.Clear();
             _breadcrumbs.Clear();
-
             if (!Directory.Exists(_curPath)) return;
 
             string rel = Path.GetRelativePath(_rootPath, _curPath);
@@ -154,7 +149,6 @@ namespace ElintriaEngine.UI.Panels
                 if (!last) { r.DrawText(">", new PointF(bx, breadRect.Y + 5f), ColTextDim, 10f); bx += 12f; }
             }
 
-            // View-mode toggle (top-right of breadcrumb)
             var tBtn = new RectangleF(Bounds.Right - 22f, breadRect.Y + 3f, 18f, 16f);
             r.FillRect(tBtn, Color.FromArgb(255, 52, 52, 52));
             r.DrawRect(tBtn, ColBorder);
@@ -167,15 +161,11 @@ namespace ElintriaEngine.UI.Panels
                        new PointF(sliderBar.Right, sliderBar.Y),
                        Color.FromArgb(255, 50, 50, 55));
 
-            // Scale label
             string scaleLabel = $"{(int)(_scale * 100)}%";
             r.DrawText("⊟", new PointF(sliderBar.X + 5f, sliderBar.Y + 5f), ColTextDim, 10f);
             r.DrawText("⊞", new PointF(sliderBar.Right - 18f, sliderBar.Y + 5f), ColTextDim, 10f);
-            r.DrawText(scaleLabel,
-                new PointF(sliderBar.Right - 50f, sliderBar.Y + 6f),
-                ColTextDim, 8f);
+            r.DrawText(scaleLabel, new PointF(sliderBar.Right - 50f, sliderBar.Y + 6f), ColTextDim, 8f);
 
-            // Track
             float padL = sliderBar.X + 18f;
             float padR = sliderBar.Right - 55f;
             _sliderTrackX = padL;
@@ -184,14 +174,12 @@ namespace ElintriaEngine.UI.Panels
             r.FillRect(track, Color.FromArgb(255, 55, 55, 60));
             r.DrawRect(track, Color.FromArgb(255, 70, 70, 78));
 
-            // Filled portion
             float frac = (_scale - MinScale) / (MaxScale - MinScale);
             float filled = _sliderTrackW * frac;
             if (filled > 0)
                 r.FillRect(new RectangleF(padL, sliderBar.Y + 10f, filled, 4f),
                     Color.FromArgb(255, 70, 130, 255));
 
-            // Thumb
             float thumbX = padL + filled - 5f;
             var thumb = new RectangleF(thumbX, sliderBar.Y + 6f, 10f, 12f);
             r.FillRect(thumb, _sliderDrag
@@ -201,10 +189,8 @@ namespace ElintriaEngine.UI.Panels
 
             // ── Content area ───────────────────────────────────────────────────
             var cr = ContentArea;
-
             r.PushClip(cr);
 
-            // Prefab drop highlight
             if (PrefabDropHighlight)
             {
                 r.FillRect(cr, Color.FromArgb(40, 80, 200, 80));
@@ -225,10 +211,7 @@ namespace ElintriaEngine.UI.Panels
             }
 
             r.PopClip();
-
-            // Scrollbar (outside clip)
             DrawScrollBarManual(r, cr);
-            // context menu rendered above dock overlay by EditorLayout
         }
 
         private void DrawScrollBarManual(IEditorRenderer r, RectangleF cr)
@@ -239,8 +222,8 @@ namespace ElintriaEngine.UI.Panels
             float ratio = cr.Height / ContentHeight;
             float thumbH = Math.Max(16f, cr.Height * ratio);
             float maxOff = ContentHeight - cr.Height;
-            float frac = maxOff > 0 ? ScrollOffset / maxOff : 0f;
-            float thumbY = cr.Y + frac * (cr.Height - thumbH);
+            float tf = maxOff > 0 ? ScrollOffset / maxOff : 0f;
+            float thumbY = cr.Y + tf * (cr.Height - thumbH);
             r.FillRect(new RectangleF(track.X + 1f, thumbY, 6f, thumbH),
                 Color.FromArgb(255, 80, 80, 80));
         }
@@ -264,24 +247,23 @@ namespace ElintriaEngine.UI.Panels
                     if (_selected == item) r.FillRect(row, ColSelected);
                     else if (_hovered == item) r.FillRect(row, ColHover);
 
-                    // Icon badge
-                    string icon = TypeLabel(item);
-                    Color iCol = IconColor(item.Type);
-                    float badgeW = icon.Length * 5.5f + 4f;
-                    var badge = new RectangleF(cr.X + 3f, y + (rowH - 14f) / 2f, badgeW, 14f);
-                    r.FillRect(badge, Color.FromArgb(180, TileBg(item.Type)));
-                    r.DrawText(icon, new PointF(badge.X + 2f, badge.Y + 2f), Color.White, MathF.Max(7f, TextFont - 1f));
+                    // Small inline icon (square, rowH-4 tall)
+                    float iconSize = MathF.Max(12f, rowH - 4f);
+                    var iconRect = new RectangleF(cr.X + 3f, y + (rowH - iconSize) / 2f,
+                                                    iconSize, iconSize);
+                    DrawAssetIcon(r, iconRect, item.Type);
 
                     // File name
                     string nm = item == _renaming ? _renameBuffer + "|" : item.Name;
-                    r.DrawText(nm, new PointF(cr.X + badgeW + 8f, y + (rowH - 10f) / 2f),
+                    r.DrawText(nm, new PointF(cr.X + iconSize + 8f, y + (rowH - 10f) / 2f),
                         item.IsDirectory ? Color.FromArgb(255, 180, 200, 255) : ColText, TextFont);
 
-                    // Extension (right-aligned)
+                    // Extension badge (right-aligned)
                     if (!item.IsDirectory)
                     {
                         string ext = Path.GetExtension(item.Name).ToUpper();
-                        r.DrawText(ext, new PointF(cr.Right - ext.Length * 5f - 6f, y + (rowH - 10f) / 2f),
+                        r.DrawText(ext,
+                            new PointF(cr.Right - ext.Length * 5f - 6f, y + (rowH - 10f) / 2f),
                             ColTextDim, MathF.Max(7f, TextFont - 2f));
                     }
                 }
@@ -300,8 +282,7 @@ namespace ElintriaEngine.UI.Panels
 
             for (int i = 0; i < _items.Count; i++)
             {
-                int col = i % cols;
-                int row = i / cols;
+                int col = i % cols, row = i / cols;
                 float tx = cr.X + gap + col * (tw + gap);
                 float ty = cr.Y + gap + row * rowH - ScrollOffset;
 
@@ -315,24 +296,20 @@ namespace ElintriaEngine.UI.Panels
                 if (sel) r.FillRect(outer, ColSelected);
                 else if (hov) r.FillRect(outer, ColHover);
 
-                // Tile body — leave room at bottom for filename
+                // Tile body
                 float labelH = MathF.Max(14f, TextFont + 6f);
                 var body = new RectangleF(tx, ty, tw, th - labelH);
                 r.FillRect(body, TileBg(item.Type));
                 r.DrawRect(body, Color.FromArgb(50, 255, 255, 255));
 
-                // Icon centred in body
-                string icon = TypeIcon(item);
-                float iconSz = IconFont;
-                float iconX = tx + (tw - iconSz * 0.65f) / 2f;
-                float iconY = ty + (body.Height - iconSz) / 2f;
-                r.DrawText(icon, new PointF(iconX, iconY), Color.White, iconSz);
-
-                // Type badge (top-left corner)
-                string badge = TypeLabel(item);
-                var badgeR = new RectangleF(tx + 2f, ty + 2f, badge.Length * 5f + 4f, 12f);
-                r.FillRect(badgeR, Color.FromArgb(150, 20, 20, 20));
-                r.DrawText(badge, new PointF(badgeR.X + 2f, badgeR.Y + 1f), IconColor(item.Type), 7f);
+                // Draw the unique vector icon centred in the body
+                float padding = body.Width * 0.15f;
+                var iconRect = new RectangleF(
+                    body.X + padding,
+                    body.Y + padding,
+                    body.Width - padding * 2f,
+                    body.Height - padding * 2f);
+                DrawAssetIcon(r, iconRect, item.Type);
 
                 // Filename below tile
                 string nm = item == _renaming ? _renameBuffer + "|" : TruncName(item.Name, _scale);
@@ -340,24 +317,448 @@ namespace ElintriaEngine.UI.Panels
             }
         }
 
-        // ── Helpers ───────────────────────────────────────────────────────────
-        // Large unicode icon for tile centre
-        private static string TypeIcon(FileItem i) => i.Type switch
+        // ══════════════════════════════════════════════════════════════════════
+        //  DrawAssetIcon
+        //
+        //  Draws a unique, recognisable icon for each AssetType inside `rect`.
+        //  All drawing uses only FillRect / DrawRect / DrawLine so it works with
+        //  any IEditorRenderer implementation.
+        //
+        //  Icon design summary:
+        //    Folder   — classic tab + open box shape
+        //    Script   — white paper with folded corner + green code lines
+        //    Texture  — checker board with mountain/sun landscape
+        //    Model    — isometric cube wireframe
+        //    Material — glossy sphere: dark circle with bright specular spot
+        //    Shader   — diamond / rhombus with gradient fill
+        //    Scene    — globe grid: circle with latitude/longitude lines
+        //    Prefab   — cyan hexagon outline
+        //    Audio    — speaker cone + waveform lines
+        //    Text     — lined paper with margin
+        //    Unknown  — grey question mark block
+        // ══════════════════════════════════════════════════════════════════════
+        private static void DrawAssetIcon(IEditorRenderer r, RectangleF rect, AssetType type)
         {
-            AssetType.Folder => "📁",
-            AssetType.Script => "📄",
-            AssetType.Texture => "🖼",
-            AssetType.Model => "📦",
-            AssetType.Material => "🎨",
-            AssetType.Shader => "✦",
-            AssetType.Scene => "🌐",
-            AssetType.Prefab => "⬡",
-            AssetType.Audio => "♪",
-            AssetType.Text => "📝",
-            _ => "?",
-        };
+            float x = rect.X, y = rect.Y, w = rect.Width, h = rect.Height;
+            // Helpers — fractional coordinates inside rect
+            float X(float f) => x + w * f;
+            float Y(float f) => y + h * f;
+            float W(float f) => w * f;
+            float H(float f) => h * f;
+            RectangleF R(float fx, float fy, float fw, float fh)
+                => new(X(fx), Y(fy), W(fw), H(fh));
 
-        // Short ASCII badge
+            switch (type)
+            {
+                // ── Folder ────────────────────────────────────────────────────
+                // Classic folder: tab on top-left, open rectangular body
+                case AssetType.Folder:
+                    {
+                        var tabCol = Color.FromArgb(255, 200, 170, 80);
+                        var bodyCol = Color.FromArgb(255, 220, 190, 100);
+                        var shadow = Color.FromArgb(255, 160, 135, 60);
+                        // body
+                        r.FillRect(R(0f, 0.30f, 1f, 0.70f), bodyCol);
+                        r.DrawRect(R(0f, 0.30f, 1f, 0.70f), shadow);
+                        // tab (top-left)
+                        r.FillRect(R(0f, 0.18f, 0.44f, 0.15f), tabCol);
+                        r.DrawRect(R(0f, 0.18f, 0.44f, 0.15f), shadow);
+                        // inner shadow line at top of body
+                        r.DrawLine(new PointF(X(0.01f), Y(0.32f)), new PointF(X(0.99f), Y(0.32f)),
+                            Color.FromArgb(80, 0, 0, 0));
+                        break;
+                    }
+
+                // ── Script ────────────────────────────────────────────────────
+                // White/light page with dog-eared top-right corner + green code lines
+                case AssetType.Script:
+                    {
+                        var pageCol = Color.FromArgb(255, 235, 240, 248);
+                        var foldCol = Color.FromArgb(255, 180, 195, 215);
+                        var lineCol = Color.FromArgb(255, 60, 185, 90);
+                        var lineCol2 = Color.FromArgb(255, 40, 140, 60);
+                        float fold = 0.28f;   // fold size
+
+                        // Page body (leave top-right corner for fold)
+                        r.FillRect(R(0f, 0f, 1f - fold, 1f), pageCol);
+                        r.FillRect(R(1f - fold, fold, fold, 1f - fold), pageCol);
+                        r.DrawRect(R(0f, 0f, 1f, 1f), foldCol);
+
+                        // Folded corner triangle: three lines forming the crease
+                        r.FillRect(R(1f - fold, 0f, fold, fold), foldCol);
+                        r.DrawLine(new PointF(X(1f - fold), Y(0f)),
+                                   new PointF(X(1f - fold), Y(fold)), foldCol);
+                        r.DrawLine(new PointF(X(1f - fold), Y(fold)),
+                                   new PointF(X(1f), Y(fold)), foldCol);
+                        // Diagonal crease line
+                        r.DrawLine(new PointF(X(1f - fold), Y(0f)),
+                                   new PointF(X(1f), Y(fold)),
+                                   Color.FromArgb(255, 140, 160, 185));
+
+                        // Code lines (green, varying widths to look like code)
+                        float lx = 0.12f, lh = 0.07f, gap = 0.13f;
+                        r.FillRect(R(lx, 0.22f, 0.55f, lh), lineCol);
+                        r.FillRect(R(lx, 0.22f + gap, 0.72f, lh), lineCol2);
+                        r.FillRect(R(lx + 0.1f, 0.22f + gap * 2f, 0.45f, lh), lineCol);
+                        r.FillRect(R(lx, 0.22f + gap * 3f, 0.62f, lh), lineCol2);
+                        r.FillRect(R(lx, 0.22f + gap * 4f, 0.38f, lh), lineCol);
+                        break;
+                    }
+
+                // ── Texture ───────────────────────────────────────────────────
+                // Checkerboard background (grey squares) + mountain silhouette + sun
+                case AssetType.Texture:
+                    {
+                        // Checkerboard: 4×4 cells
+                        var c1 = Color.FromArgb(255, 90, 90, 95);
+                        var c2 = Color.FromArgb(255, 60, 60, 65);
+                        int cells = 4;
+                        for (int cx = 0; cx < cells; cx++)
+                            for (int cy = 0; cy < cells; cy++)
+                            {
+                                bool dark = (cx + cy) % 2 == 0;
+                                r.FillRect(new RectangleF(
+                                    x + w * cx / cells, y + h * cy / cells,
+                                    w / cells + 1f, h / cells + 1f),
+                                    dark ? c1 : c2);
+                            }
+
+                        // Sky gradient strip (top third)
+                        r.FillRect(R(0f, 0f, 1f, 0.40f), Color.FromArgb(200, 70, 130, 210));
+
+                        // Sun (small bright square top-right)
+                        r.FillRect(R(0.62f, 0.06f, 0.22f, 0.22f), Color.FromArgb(255, 255, 225, 60));
+                        r.DrawRect(R(0.62f, 0.06f, 0.22f, 0.22f), Color.FromArgb(200, 230, 190, 0));
+
+                        // Mountain silhouette (two triangles made of stacked rects)
+                        var mtnCol = Color.FromArgb(255, 55, 110, 65);
+                        var mtnDark = Color.FromArgb(255, 35, 80, 45);
+                        // Left mountain
+                        for (int mi = 0; mi < 8; mi++)
+                        {
+                            float mf = mi / 8f;
+                            float mw = (0.5f - mf * 0.5f);
+                            r.FillRect(new RectangleF(
+                                x + w * (0.0f + mf * 0.25f), y + h * (0.38f + mf * 0.30f),
+                                w * mw, h * 0.08f), mi < 4 ? mtnCol : mtnDark);
+                        }
+                        // Right mountain (smaller)
+                        for (int mi = 0; mi < 6; mi++)
+                        {
+                            float mf = mi / 6f;
+                            float mw = (0.38f - mf * 0.38f);
+                            r.FillRect(new RectangleF(
+                                x + w * (0.55f + mf * 0.20f), y + h * (0.50f + mf * 0.25f),
+                                w * mw, h * 0.08f), mtnCol);
+                        }
+
+                        // Ground strip at bottom
+                        r.FillRect(R(0f, 0.82f, 1f, 0.18f), Color.FromArgb(200, 40, 90, 45));
+                        r.DrawRect(R(0f, 0f, 1f, 1f), Color.FromArgb(100, 255, 255, 255));
+                        break;
+                    }
+
+                // ── Model (3D) ────────────────────────────────────────────────
+                // Isometric cube: three visible faces with different shades
+                case AssetType.Model:
+                    {
+                        var top = Color.FromArgb(255, 180, 150, 255);
+                        var left = Color.FromArgb(255, 100, 75, 180);
+                        var right = Color.FromArgb(255, 130, 100, 220);
+                        var edge = Color.FromArgb(255, 60, 45, 130);
+
+                        // Top face (parallelogram via stacked rects)
+                        for (int row = 0; row < 6; row++)
+                        {
+                            float rf = row / 6f;
+                            float off = rf * 0.25f;
+                            r.FillRect(new RectangleF(
+                                x + w * (0.25f + off), y + h * (0.08f + rf * 0.14f),
+                                w * 0.50f, h * 0.06f), top);
+                        }
+                        // Left face
+                        for (int col = 0; col < 6; col++)
+                        {
+                            float cf = col / 6f;
+                            float off = cf * 0.14f;
+                            r.FillRect(new RectangleF(
+                                x + w * (0.08f + cf * 0.17f), y + h * (0.38f + off),
+                                w * 0.17f, h * 0.50f), left);
+                        }
+                        // Right face
+                        r.FillRect(R(0.50f, 0.38f, 0.42f, 0.50f), right);
+                        // Edge outlines
+                        r.DrawRect(R(0.50f, 0.38f, 0.42f, 0.50f), edge);
+                        // Top outline lines
+                        r.DrawLine(new PointF(X(0.25f), Y(0.22f)), new PointF(X(0.50f), Y(0.08f)), edge);
+                        r.DrawLine(new PointF(X(0.50f), Y(0.08f)), new PointF(X(0.92f), Y(0.22f)), edge);
+                        r.DrawLine(new PointF(X(0.25f), Y(0.22f)), new PointF(X(0.50f), Y(0.38f)), edge);
+                        r.DrawLine(new PointF(X(0.08f), Y(0.38f)), new PointF(X(0.08f), Y(0.88f)), edge);
+                        break;
+                    }
+
+                // ── Material ──────────────────────────────────────────────────
+                // Sphere: concentric oval rings + bright specular highlight
+                case AssetType.Material:
+                    {
+                        var colors = new[]
+                        {
+                        Color.FromArgb(255, 30,  60, 180),   // deep blue core
+                        Color.FromArgb(255, 40,  80, 210),
+                        Color.FromArgb(255, 55, 105, 230),
+                        Color.FromArgb(255, 70, 130, 245),
+                        Color.FromArgb(255, 90, 155, 255),
+                        Color.FromArgb(255, 110,175, 255),
+                        Color.FromArgb(255, 135,195, 255),   // bright edge
+                    };
+
+                        // Draw sphere as concentric filled ellipses (stacked rects approximation)
+                        int rings = colors.Length;
+                        for (int ri = 0; ri < rings; ri++)
+                        {
+                            float t2 = (float)ri / rings;
+                            float rad = 0.5f - t2 * 0.5f;
+                            float cx2 = 0.5f - rad;
+                            float cy2 = 0.5f - rad * (h / w);  // aspect correct
+                            r.FillRect(new RectangleF(
+                                x + w * cx2, y + h * cy2,
+                                w * rad * 2f, h * rad * 2f * (h / w)),
+                                colors[rings - 1 - ri]);
+                        }
+
+                        // Specular highlight: small bright white square top-left of sphere
+                        r.FillRect(R(0.22f, 0.14f, 0.22f, 0.16f), Color.FromArgb(200, 255, 255, 255));
+                        r.FillRect(R(0.25f, 0.17f, 0.14f, 0.10f), Color.FromArgb(240, 255, 255, 255));
+
+                        // Rim line
+                        r.DrawRect(new RectangleF(x + w * 0.02f, y + h * 0.02f,
+                            w * 0.96f, h * 0.96f),
+                            Color.FromArgb(60, 255, 255, 255));
+                        break;
+                    }
+
+                // ── Shader ────────────────────────────────────────────────────
+                // Diamond / rhombus shape with cyan gradient fill + grid lines
+                case AssetType.Shader:
+                    {
+                        var col1 = Color.FromArgb(255, 20, 190, 220);
+                        var col2 = Color.FromArgb(255, 10, 130, 160);
+                        var edge = Color.FromArgb(255, 0, 220, 255);
+
+                        // Diamond via stacked horizontal bars
+                        int bars = 12;
+                        for (int bi = 0; bi < bars; bi++)
+                        {
+                            float bf = bi / (float)bars;
+                            float bfw = bi <= bars / 2
+                                ? bf * 2f
+                                : (1f - bf) * 2f;
+                            float bx2 = 0.5f - bfw * 0.5f;
+                            var bar = new RectangleF(
+                                x + w * bx2,
+                                y + h * (bf + 0.5f / bars),
+                                w * bfw, h / bars);
+                            r.FillRect(bar, bi <= bars / 2 ? col1 : col2);
+                        }
+
+                        // Grid lines across diamond
+                        for (int gl = 1; gl < 4; gl++)
+                        {
+                            float gf = gl / 4f;
+                            float gw = (gf < 0.5f ? gf : 1f - gf) * 2f * 0.9f;
+                            r.DrawLine(
+                                new PointF(x + w * (0.5f - gw / 2f), y + h * gf),
+                                new PointF(x + w * (0.5f + gw / 2f), y + h * gf),
+                                Color.FromArgb(80, 0, 220, 255));
+                        }
+
+                        // Outline — four edges of the diamond
+                        r.DrawLine(new PointF(X(0.5f), Y(0.02f)), new PointF(X(0.98f), Y(0.5f)), edge);
+                        r.DrawLine(new PointF(X(0.98f), Y(0.5f)), new PointF(X(0.5f), Y(0.98f)), edge);
+                        r.DrawLine(new PointF(X(0.5f), Y(0.98f)), new PointF(X(0.02f), Y(0.5f)), edge);
+                        r.DrawLine(new PointF(X(0.02f), Y(0.5f)), new PointF(X(0.5f), Y(0.02f)), edge);
+                        break;
+                    }
+
+                // ── Scene ─────────────────────────────────────────────────────
+                // Globe: circle approximated with stacked rects + lat/lon grid lines
+                case AssetType.Scene:
+                    {
+                        var globeBg = Color.FromArgb(255, 20, 60, 140);
+                        var land = Color.FromArgb(255, 50, 130, 60);
+                        var gridCol = Color.FromArgb(120, 100, 180, 255);
+                        var edgeCol = Color.FromArgb(255, 60, 120, 220);
+
+                        // Globe body (circle via stacked rects)
+                        int gr = 14;
+                        for (int ri = 0; ri < gr; ri++)
+                        {
+                            float rf = ri / (float)gr;
+                            float rh2 = rf < 0.5f ? rf * 2f : (1f - rf) * 2f;
+                            float rw2 = MathF.Sqrt(MathF.Max(0, rh2 * (2f - rh2)));
+                            float ry = rf;
+                            r.FillRect(new RectangleF(
+                                x + w * (0.5f - rw2 * 0.48f),
+                                y + h * (ry + 0.5f / gr),
+                                w * rw2 * 0.96f, h / gr), globeBg);
+                        }
+
+                        // Land patches (small green rects scattered on globe)
+                        r.FillRect(R(0.20f, 0.30f, 0.22f, 0.18f), land);
+                        r.FillRect(R(0.52f, 0.24f, 0.28f, 0.22f), land);
+                        r.FillRect(R(0.30f, 0.55f, 0.18f, 0.15f), land);
+                        r.FillRect(R(0.55f, 0.58f, 0.20f, 0.12f), land);
+
+                        // Latitude lines (3 horizontal)
+                        foreach (float lat in new[] { 0.28f, 0.50f, 0.72f })
+                        {
+                            float lf = lat < 0.5f ? lat * 2f : (1f - lat) * 2f;
+                            float lw2 = MathF.Sqrt(MathF.Max(0, lf * (2f - lf))) * 0.48f;
+                            r.DrawLine(new PointF(x + w * (0.5f - lw2), y + h * lat),
+                                       new PointF(x + w * (0.5f + lw2), y + h * lat),
+                                       gridCol);
+                        }
+                        // Longitude lines (2 vertical, curved approximated)
+                        r.DrawLine(new PointF(X(0.50f), Y(0.03f)), new PointF(X(0.50f), Y(0.97f)), gridCol);
+                        r.DrawLine(new PointF(X(0.26f), Y(0.10f)), new PointF(X(0.26f), Y(0.90f)), gridCol);
+                        r.DrawLine(new PointF(X(0.74f), Y(0.10f)), new PointF(X(0.74f), Y(0.90f)), gridCol);
+
+                        // Outline
+                        for (int ri = 0; ri < gr; ri++)
+                        {
+                            float rf = ri / (float)gr;
+                            float rh2 = rf < 0.5f ? rf * 2f : (1f - rf) * 2f;
+                            float rw2 = MathF.Sqrt(MathF.Max(0, rh2 * (2f - rh2)));
+                            float ry = rf;
+                            r.DrawRect(new RectangleF(
+                                x + w * (0.5f - rw2 * 0.48f),
+                                y + h * (ry + 0.5f / gr),
+                                w * rw2 * 0.96f, h / gr), edgeCol);
+                        }
+                        break;
+                    }
+
+                // ── Prefab ────────────────────────────────────────────────────
+                // Cyan hexagon outline with a small inner circle
+                case AssetType.Prefab:
+                    {
+                        var hexCol = Color.FromArgb(255, 80, 200, 255);
+                        var fillCol = Color.FromArgb(255, 20, 80, 140);
+                        var dotCol = Color.FromArgb(255, 140, 230, 255);
+
+                        // Hexagon: 6 rows of varying width
+                        float[] widths = { 0.50f, 0.80f, 1.00f, 1.00f, 0.80f, 0.50f };
+                        float[] tops = { 0.00f, 0.17f, 0.33f, 0.50f, 0.67f, 0.83f };
+                        for (int hi = 0; hi < 6; hi++)
+                        {
+                            float hw = widths[hi];
+                            r.FillRect(new RectangleF(
+                                x + w * (0.5f - hw / 2f * 0.9f),
+                                y + h * (tops[hi] + 0.02f),
+                                w * hw * 0.9f, h * 0.18f), fillCol);
+                        }
+                        // Outline: edges of hexagon
+                        PointF[] hex = new PointF[6];
+                        for (int hi = 0; hi < 6; hi++)
+                        {
+                            float ang = MathF.PI / 180f * (60f * hi - 30f);
+                            hex[hi] = new PointF(
+                                x + w * 0.5f + w * 0.44f * MathF.Cos(ang),
+                                y + h * 0.5f + h * 0.44f * MathF.Sin(ang));
+                        }
+                        for (int hi = 0; hi < 6; hi++)
+                            r.DrawLine(hex[hi], hex[(hi + 1) % 6], hexCol);
+
+                        // Inner dot
+                        r.FillRect(R(0.38f, 0.38f, 0.24f, 0.24f), dotCol);
+                        r.DrawRect(R(0.38f, 0.38f, 0.24f, 0.24f), hexCol);
+                        break;
+                    }
+
+                // ── Audio ─────────────────────────────────────────────────────
+                // Speaker cone (trapezoid) + sound wave arcs (curved via line segments)
+                case AssetType.Audio:
+                    {
+                        var speakerCol = Color.FromArgb(255, 210, 100, 160);
+                        var waveCol = Color.FromArgb(255, 240, 140, 190);
+                        var coneCol = Color.FromArgb(255, 160, 60, 120);
+
+                        // Speaker body (rectangle left side)
+                        r.FillRect(R(0.08f, 0.35f, 0.25f, 0.30f), speakerCol);
+                        r.DrawRect(R(0.08f, 0.35f, 0.25f, 0.30f), coneCol);
+
+                        // Speaker cone (trapezoid: wider on right, made of 6 rows)
+                        for (int ci = 0; ci < 7; ci++)
+                        {
+                            float cf = ci / 7f;
+                            float cw = 0.08f + cf * 0.22f;
+                            float cy2 = 0.20f + cf * 0.35f;
+                            r.FillRect(new RectangleF(
+                                x + w * (0.30f - cw / 2f + 0.15f + cf * 0.10f),
+                                y + h * cy2,
+                                w * cw * 0.9f, h * 0.09f), speakerCol);
+                        }
+
+                        // Sound waves (3 arcs drawn as short line segments)
+                        float[] waveR = { 0.18f, 0.26f, 0.34f };
+                        foreach (float wr2 in waveR)
+                        {
+                            for (int wi = -2; wi <= 2; wi++)
+                            {
+                                float a1 = wi * 0.35f - 0.18f;
+                                float a2 = (wi + 1) * 0.35f - 0.18f;
+                                r.DrawLine(
+                                    new PointF(x + w * (0.62f + wr2 * MathF.Sin(a1)),
+                                               y + h * (0.50f - wr2 * MathF.Cos(a1) * (w / h))),
+                                    new PointF(x + w * (0.62f + wr2 * MathF.Sin(a2)),
+                                               y + h * (0.50f - wr2 * MathF.Cos(a2) * (w / h))),
+                                    waveCol);
+                            }
+                        }
+                        break;
+                    }
+
+                // ── Text ──────────────────────────────────────────────────────
+                // Lined paper: white page, red margin line, grey text lines
+                case AssetType.Text:
+                    {
+                        var pageCol = Color.FromArgb(255, 240, 240, 235);
+                        var marginCol = Color.FromArgb(255, 220, 80, 80);
+                        var lineCol = Color.FromArgb(180, 140, 140, 160);
+                        var fold = Color.FromArgb(255, 200, 200, 195);
+
+                        r.FillRect(R(0f, 0f, 1f, 1f), pageCol);
+                        r.DrawRect(R(0f, 0f, 1f, 1f), fold);
+
+                        // Red margin line
+                        r.DrawLine(new PointF(X(0.22f), Y(0.05f)),
+                                   new PointF(X(0.22f), Y(0.95f)), marginCol);
+
+                        // Text lines (6 grey lines, varying widths)
+                        float[] lw = { 0.65f, 0.72f, 0.58f, 0.70f, 0.50f, 0.68f };
+                        for (int li = 0; li < lw.Length; li++)
+                        {
+                            float ly = 0.16f + li * 0.135f;
+                            r.FillRect(new RectangleF(
+                                X(0.26f), Y(ly), W(lw[li]), H(0.07f)), lineCol);
+                        }
+                        break;
+                    }
+
+                // ── Unknown ───────────────────────────────────────────────────
+                default:
+                    {
+                        r.FillRect(rect, Color.FromArgb(255, 58, 58, 62));
+                        r.DrawRect(rect, Color.FromArgb(255, 90, 90, 95));
+                        // Question mark: vertical bar + dot
+                        r.FillRect(R(0.38f, 0.18f, 0.24f, 0.38f), Color.FromArgb(255, 160, 160, 165));
+                        r.FillRect(R(0.38f, 0.64f, 0.24f, 0.18f), Color.FromArgb(255, 160, 160, 165));
+                        break;
+                    }
+            }
+        }
+
+        // ── Helpers ───────────────────────────────────────────────────────────
         private static string TypeLabel(FileItem i) => i.Type switch
         {
             AssetType.Folder => "DIR",
@@ -373,32 +774,19 @@ namespace ElintriaEngine.UI.Panels
             _ => "???",
         };
 
-        private static Color IconColor(AssetType t) => t switch
-        {
-            AssetType.Folder => Color.FromArgb(255, 160, 190, 255),
-            AssetType.Script => Color.FromArgb(255, 100, 210, 100),
-            AssetType.Texture => Color.FromArgb(255, 210, 130, 80),
-            AssetType.Model => Color.FromArgb(255, 160, 120, 220),
-            AssetType.Material => Color.FromArgb(255, 220, 190, 60),
-            AssetType.Shader => Color.FromArgb(255, 80, 200, 220),
-            AssetType.Scene => Color.FromArgb(255, 80, 190, 80),
-            AssetType.Prefab => Color.FromArgb(255, 120, 200, 255),
-            AssetType.Audio => Color.FromArgb(255, 210, 100, 160),
-            _ => Color.FromArgb(255, 160, 160, 160),
-        };
-
         private static Color TileBg(AssetType t) => t switch
         {
             AssetType.Folder => Color.FromArgb(255, 50, 85, 130),
-            AssetType.Script => Color.FromArgb(255, 40, 120, 50),
-            AssetType.Texture => Color.FromArgb(255, 120, 55, 50),
-            AssetType.Model => Color.FromArgb(255, 65, 50, 130),
-            AssetType.Material => Color.FromArgb(255, 130, 100, 35),
-            AssetType.Shader => Color.FromArgb(255, 35, 115, 130),
-            AssetType.Scene => Color.FromArgb(255, 35, 85, 35),
-            AssetType.Prefab => Color.FromArgb(255, 30, 90, 140),
-            AssetType.Audio => Color.FromArgb(255, 120, 45, 110),
-            _ => Color.FromArgb(255, 58, 58, 58),
+            AssetType.Script => Color.FromArgb(255, 30, 80, 40),
+            AssetType.Texture => Color.FromArgb(255, 50, 50, 58),
+            AssetType.Model => Color.FromArgb(255, 45, 35, 95),
+            AssetType.Material => Color.FromArgb(255, 15, 35, 90),
+            AssetType.Shader => Color.FromArgb(255, 15, 75, 90),
+            AssetType.Scene => Color.FromArgb(255, 15, 35, 80),
+            AssetType.Prefab => Color.FromArgb(255, 20, 60, 90),
+            AssetType.Audio => Color.FromArgb(255, 80, 30, 70),
+            AssetType.Text => Color.FromArgb(255, 60, 60, 50),
+            _ => Color.FromArgb(255, 45, 45, 48),
         };
 
         private string TruncName(string s, float scale)
@@ -434,22 +822,16 @@ namespace ElintriaEngine.UI.Panels
 
             if (_renaming != null) { CommitRename(); return; }
 
-            // ── Slider bar ────────────────────────────────────────────────────
             if (SliderBarRect.Contains(pos) && e.Button == MouseButton.Left)
             {
                 if (pos.X >= _sliderTrackX && pos.X <= _sliderTrackX + _sliderTrackW)
-                {
-                    _sliderDrag = true;
-                    ApplySliderDrag(pos.X);
-                }
+                { _sliderDrag = true; ApplySliderDrag(pos.X); }
                 return;
             }
 
-            // ── View toggle ───────────────────────────────────────────────────
             var tBtn = new RectangleF(Bounds.Right - 22f, Bounds.Y + HeaderH + 3f, 18f, 16f);
             if (tBtn.Contains(pos)) { _tileView = !_tileView; ScrollOffset = 0f; return; }
 
-            // ── Breadcrumb ────────────────────────────────────────────────────
             if (HandleBreadcrumb(pos)) return;
 
             var ca = ContentArea;
@@ -491,11 +873,7 @@ namespace ElintriaEngine.UI.Panels
             base.OnMouseMove(pos);
             _ctxMenu?.OnMouseMove(pos);
 
-            if (_sliderDrag)
-            {
-                ApplySliderDrag(pos.X);
-                return;
-            }
+            if (_sliderDrag) { ApplySliderDrag(pos.X); return; }
 
             _hovered = ContentArea.Contains(pos) ? HitTest(pos) : null;
 
@@ -541,7 +919,6 @@ namespace ElintriaEngine.UI.Panels
             _scale = MinScale + frac * (MaxScale - MinScale);
         }
 
-        // ── Hit test ──────────────────────────────────────────────────────────
         private FileItem? HitTest(PointF pos)
         {
             foreach (var i in _items)
@@ -549,7 +926,6 @@ namespace ElintriaEngine.UI.Panels
             return null;
         }
 
-        // ── Breadcrumb ────────────────────────────────────────────────────────
         private bool HandleBreadcrumb(PointF pos)
         {
             float bx = Bounds.X + 6f;
@@ -571,7 +947,6 @@ namespace ElintriaEngine.UI.Panels
             _curPath = p; ScrollOffset = 0f; Refresh();
         }
 
-        // ── Double click ──────────────────────────────────────────────────────
         private void HandleDoubleClick(FileItem item)
         {
             AssetDoubleClicked?.Invoke(item);
@@ -593,7 +968,6 @@ namespace ElintriaEngine.UI.Panels
             Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
         }
 
-        // ── Rename ────────────────────────────────────────────────────────────
         private void StartRename(FileItem item)
         { _renaming = item; _renameBuffer = Path.GetFileNameWithoutExtension(item.Name); }
 
@@ -612,7 +986,6 @@ namespace ElintriaEngine.UI.Panels
             _renaming = null;
         }
 
-        // ── Delete ────────────────────────────────────────────────────────────
         private void DeleteSelected()
         {
             if (_selected == null) return;
@@ -625,19 +998,18 @@ namespace ElintriaEngine.UI.Panels
             catch { }
         }
 
-        // ── Context menu ──────────────────────────────────────────────────────
         private void ShowContextMenu(PointF pos, FileItem? target)
         {
             var items = new List<ContextMenuItem>
             {
                 new("Create", null) { IsDisabled = true },
-                new("  Folder",      () => CreateAsset("New Folder",    AssetKind.Folder)),
-                new("  C# Script",   () => CreateAsset("NewScript",     AssetKind.Script)),
-                new("  Scene",       () => CreateAsset("New Scene",     AssetKind.Scene)),
-                new("  Material",    () => CreateAsset("New Material",  AssetKind.Material)),
-                new("  Shader",      () => CreateAsset("New Shader",    AssetKind.Shader)),
-                new("  Plain Text",  () => CreateAsset("notes",         AssetKind.Text)),
-                new("  Prefab",      () => CreateAsset("New Prefab",    AssetKind.Prefab)),
+                new("  Folder",     () => CreateAsset("New Folder",   AssetKind.Folder)),
+                new("  C# Script",  () => CreateAsset("NewScript",    AssetKind.Script)),
+                new("  Scene",      () => CreateAsset("New Scene",    AssetKind.Scene)),
+                new("  Material",   () => CreateAsset("New Material", AssetKind.Material)),
+                new("  Shader",     () => CreateAsset("New Shader",   AssetKind.Shader)),
+                new("  Plain Text", () => CreateAsset("notes",        AssetKind.Text)),
+                new("  Prefab",     () => CreateAsset("New Prefab",   AssetKind.Prefab)),
             };
             if (target != null)
             {
@@ -673,7 +1045,6 @@ namespace ElintriaEngine.UI.Panels
                 _ => ""
             };
             string path = UniquePath(_curPath, name, ext.Length > 0 ? "." + ext : "");
-
             switch (kind)
             {
                 case AssetKind.Folder: Directory.CreateDirectory(path); break;
