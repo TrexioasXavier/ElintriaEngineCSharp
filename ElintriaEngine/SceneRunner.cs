@@ -157,22 +157,17 @@ namespace ElintriaEngine.Core
             _fixedAccum = 0;
             _pendingStart.Clear();
 
-            // Make the physics system aware of the active scene
+            // Always point Physics at the live scene before any Awake/Start runs.
+            // This must come first so scripts can safely call Physics.Raycast
+            // from Awake() or OnStart().
             Physics.SetScene(scene);
 
-            // Step 1 — load compiled user scripts
             LoadUserScripts(projectRoot);
-
-            // Step 2 — resolve DynamicScript placeholders
             ResolveDynamicScripts();
 
-            // Step 3 — subscribe to ComponentAdded on every GO so mid-play
-            // AddComponent() calls get bootstrapped automatically
             foreach (var go in _scene.All())
                 SubscribeGO(go);
 
-            // Step 4 — Awake → OnEnable → OnStart for everything
-            // Unity calls Awake on ALL objects first, then OnEnable, then Start
             var allComponents = CollectActive();
             foreach (var comp in allComponents)
                 SafeCall(comp, "Awake", c => c.Awake());
@@ -183,7 +178,6 @@ namespace ElintriaEngine.Core
             foreach (var comp in allComponents)
                 SafeCall(comp, "OnStart", c => c.OnStart());
 
-            // Auto-play ParticleSystem components that have PlayOnAwake set
             foreach (var go in _scene.All())
                 foreach (var comp in go.Components)
                     if (comp is ParticleSystem ps && ps.PlayOnAwake && ps.Enabled)
@@ -199,11 +193,9 @@ namespace ElintriaEngine.Core
         {
             if (!_started || _scene == null) return;
 
-            // Unsubscribe events
             foreach (var go in _scene.All())
                 UnsubscribeGO(go);
 
-            // OnDisable all enabled first, then OnDestroy all
             foreach (var go in _scene.All())
                 foreach (var comp in go.Components.ToArray())
                     if (comp.Enabled)
@@ -216,7 +208,14 @@ namespace ElintriaEngine.Core
             _pendingStart.Clear();
             _started = false;
             _scene = null;
-            Physics.SetScene(null);
+
+            // ── DO NOT call Physics.SetScene(null) here ──────────────────────
+            // EditorLayout.ExitPlayMode() restores the editor scene immediately
+            // after calling Stop(), and will call Physics.SetScene(_savedScene).
+            // Nulling it here would leave a window where Physics has no scene.
+            // ─────────────────────────────────────────────────────────────────
+
+            PhysicsDebug.Clear();   // remove any lingering debug rays from play mode
             Stopped?.Invoke();
         }
 
@@ -227,10 +226,11 @@ namespace ElintriaEngine.Core
         {
             if (!_started || IsPaused || _scene == null) return;
 
-            // Bootstrap components added since last frame
+            // Advance PhysicsDebug clock so timed DrawRay calls expire correctly
+            PhysicsDebug.Tick((float)dt);
+
             FlushPending();
 
-            // FixedUpdate (50 Hz)
             _fixedAccum += dt;
             while (_fixedAccum >= FixedStep)
             {
@@ -242,14 +242,12 @@ namespace ElintriaEngine.Core
                                 SafeCall(c, "OnFixedUpdate", x => x.OnFixedUpdate(FixedStep));
             }
 
-            // Update
             foreach (var go in _scene.All())
                 if (go.ActiveSelf)
                     foreach (var c in go.Components.ToArray())
                         if (c.Enabled)
                             SafeCall(c, "OnUpdate", x => x.OnUpdate(dt));
 
-            // LateUpdate
             foreach (var go in _scene.All())
                 if (go.ActiveSelf)
                     foreach (var c in go.Components.ToArray())

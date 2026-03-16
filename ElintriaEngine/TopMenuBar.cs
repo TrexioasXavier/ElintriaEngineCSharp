@@ -44,6 +44,7 @@ namespace ElintriaEngine.UI.Panels
         public Action? Play, Pause, Stop;
         public Action? BuildOnly, BuildAndRun, OpenBuildSettings;
         public Action? RegenerateScripts;
+        public Action? ImportUnityScene;
         public Action<string>? ToggleWindow;
 
         private static readonly Color CBar = Color.FromArgb(255, 24, 24, 24);
@@ -64,6 +65,7 @@ namespace ElintriaEngine.UI.Panels
                 MenuDropdownItem.Sep,
                 new("Save Scene",      () => SaveScene?.Invoke())   { Shortcut="Ctrl+S" },
                 new("Save Scene As...",() => SaveSceneAs?.Invoke()) { Shortcut="Ctrl+Shift+S" },
+                new("Import Unity Scene (.unity)...", () => ImportUnityScene?.Invoke()),
                 MenuDropdownItem.Sep,
                 new("Return to Launcher", () => ReturnToLauncher?.Invoke()),
                 new("Exit",            () => Exit?.Invoke())        { Shortcut="Alt+F4" },

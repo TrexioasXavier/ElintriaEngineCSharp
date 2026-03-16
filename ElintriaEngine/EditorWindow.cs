@@ -53,11 +53,15 @@ namespace ElintriaEngine
 
             // Always start with the project launcher — no bypass.
             ShowLauncher();
+
+
+            
         }
 
         protected override void OnUnload()
         {
             base.OnUnload();
+            
             _layout?.Dispose();
             _renderer?.Dispose();
         }

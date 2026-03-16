@@ -45,6 +45,23 @@
             "Metallic": 0,
             "Roughness": 0.6
           }
+        },
+        {
+          "TypeName": "BoxCollider",
+          "Enabled": true,
+          "Properties": {
+            "Center": [
+              0,
+              0,
+              0
+            ],
+            "Size": [
+              1,
+              1,
+              1
+            ],
+            "IsTrigger": true
+          }
         }
       ],
       "Children": []
@@ -96,7 +113,7 @@
       "Position": [
         0,
         0,
-        0
+        3.8224711
       ],
       "Rotation": [
         0,

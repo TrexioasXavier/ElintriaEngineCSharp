@@ -149,6 +149,7 @@ namespace ElintriaEngine.UI
             Hierarchy.SetScene(_scene);
             SceneView.SetScene(_scene);
             BuildSettings.SetScene(_scene);
+            Physics.SetScene(_scene);
             BuildSettings.SetUIDocument(_uiDocument);
 
             string assetsDir = System.IO.Path.Combine(projectRoot, "Assets");
@@ -213,6 +214,7 @@ namespace ElintriaEngine.UI
             SceneView.SetScene(_scene);
             BuildSettings.SetScene(_scene);
             Inspector.Scene = _scene;
+            Physics.SetScene(_scene);
             Inspector.AssetsRoot = System.IO.Directory.Exists(
                 System.IO.Path.Combine(_projectRoot, "Assets"))
                 ? System.IO.Path.Combine(_projectRoot, "Assets")
@@ -249,6 +251,8 @@ namespace ElintriaEngine.UI
             Hierarchy.GODragStarted += go => { _goDragActive = go; };
 
             MenuBar.NewScene += () => { _scene = new Core.Scene(); Hierarchy.SetScene(_scene); SceneView.SetScene(_scene); Inspector.Inspect(null); Inspector.Scene = _scene; BuildSettings.SetScene(_scene); };
+            Physics.SetScene(_scene);
+
             MenuBar.SaveScene += SaveScene;
             MenuBar.SaveSceneAs += SaveSceneAs;
             MenuBar.OpenScene += OpenSceneDialog;
@@ -260,6 +264,7 @@ namespace ElintriaEngine.UI
             MenuBar.OpenBuildSettings += () => BuildSettings.IsVisible = !BuildSettings.IsVisible;
             MenuBar.OpenPreferences += () => Preferences.IsVisible = !Preferences.IsVisible;
             MenuBar.OpenProjectSettings += () => ProjectSettings.IsVisible = !ProjectSettings.IsVisible;
+            MenuBar.ImportUnityScene += ImportUnitySceneDialog;
 
             MenuBar.Play += EnterPlayMode;
             MenuBar.Pause += () => { _runner.IsPaused = !_runner.IsPaused; SceneView.IsPaused = _runner.IsPaused; };
@@ -410,6 +415,7 @@ namespace ElintriaEngine.UI
             SceneView.IsPlaying = false;
             SceneView.ActiveTab = SceneViewPanel.ViewTab.Scene;
             Inspector.Inspect(null);
+            Physics.SetScene(_scene);
         }
         /// <summary>
         /// Called every frame by EditorWindow on the main/render thread.
@@ -1018,6 +1024,39 @@ namespace ElintriaEngine.UI
                     _sceneFiles.Add(f);
 
             if (_sceneFiles.Count > 0) { _showScenePicker = true; _scenePickerHover = -1; }
+        }
+
+        private void ImportUnitySceneDialog()
+        {
+            string? path = Core.NativeDialog.OpenFile(
+                "Import Unity Scene",
+                "Unity scene files (*.unity)|*.unity|All files (*.*)|*.*",
+                BestInitialDir());
+     
+            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return;
+     
+            try
+            {
+                var imported = Core.UnitySceneImporter.Import(path);
+                _scene = imported;
+                Hierarchy.SetScene(_scene);
+                SceneView.SetScene(_scene);
+                BuildSettings.SetScene(_scene);
+                Inspector.Scene  = _scene;
+                Inspector.AssetsRoot = System.IO.Directory.Exists(
+                    System.IO.Path.Combine(_projectRoot, "Assets"))
+                    ? System.IO.Path.Combine(_projectRoot, "Assets")
+                    : _projectRoot;
+                Inspector.Inspect(null);
+                Core.SceneRunner.LoadUserScripts(_projectRoot);
+                Core.SceneRunner.ResolveEditorScripts(_scene);
+                ReloadSceneModels();
+                Console.WriteLine($"[Editor] Unity scene imported: {path}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Editor] Unity import failed: {ex.Message}");
+            }
         }
 
         private void SaveSceneAs()
