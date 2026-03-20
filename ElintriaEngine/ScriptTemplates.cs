@@ -59,39 +59,35 @@ namespace GameScripts
   ""gameObjects"": []
 }}";
 
-        public static string Material() => @"{
-  ""shader"": ""Standard"",
-  ""albedo"":  [1.0, 1.0, 1.0, 1.0],
-  ""metallic"": 0.0,
-  ""roughness"": 0.5,
-  ""emission"": [0.0, 0.0, 0.0]
-}";
-
+        // ── Material template ─────────────────────────────────────────────────
+        // Produces the new format consumed by MaterialAsset.Load():
+        //   { "shader": "...", "properties": { "_Color": [...], ... } }
+        // The old flat format (albedo/metallic/roughness) is intentionally
+        // retired here; MaterialAsset.Load() still migrates old files on read.
         public static string Material(string shaderPath = "Standard") => $@"{{
   ""shader"": ""{shaderPath}"",
   ""properties"": {{
-    ""_Color"":     [1.0, 1.0, 1.0, 1.0],
-    ""_Metallic"":  0.0,
-    ""_Roughness"": 0.5
+    ""_Color"":        [1.0, 1.0, 1.0, 1.0],
+    ""_Metallic"":     0.0,
+    ""_Roughness"":    0.5,
+    ""_EmissionColor"": [0.0, 0.0, 0.0, 1.0]
   }}
 }}";
 
         public static string Shader(string name) => $@"// Elintria Engine Shader – {name}
 // Properties block defines the fields shown in the Material Inspector.
-// Syntax: _UniformName (""Display Name"", Type) = DefaultValue
-//   Types: Float, Int, Range(min,max), Color, Vector, 2D
 
 Properties
 {{
-    _MainTex    (""Albedo (RGB)"",      2D)          = ""white""
-    _Color      (""Tint Color"",        Color)       = (1, 1, 1, 1)
-    _Metallic   (""Metallic"",          Range(0, 1)) = 0.0
-    _Roughness  (""Roughness"",         Range(0, 1)) = 0.5
-    _EmissionColor (""Emission Color"", Color)       = (0, 0, 0, 1)
-    _NormalMap  (""Normal Map"",        2D)          = ""bump""
+    _MainTex       (""Albedo (RGB)"",      2D)          = ""white""
+    _Color         (""Tint Color"",        Color)       = (1, 1, 1, 1)
+    _Metallic      (""Metallic"",          Range(0, 1)) = 0.0
+    _Roughness     (""Roughness"",         Range(0, 1)) = 0.5
+    _EmissionColor (""Emission Color"",    Color)       = (0, 0, 0, 1)
+    _NormalMap     (""Normal Map"",        2D)          = ""bump""
 }}
 
-// ── Vertex ──────────────────────────────────────────────────────────────────
+// -- Vertex ------------------------------------------------------------------
 #pragma vertex
 #version 330 core
 layout(location=0) in vec3 aPos;
@@ -116,7 +112,7 @@ void main()
     gl_Position   = uProjection * uView * worldPos;
 }}
 
-// ── Fragment ─────────────────────────────────────────────────────────────────
+// -- Fragment ----------------------------------------------------------------
 #pragma fragment
 #version 330 core
 in vec3 vNormal;
@@ -128,19 +124,79 @@ uniform vec4      _Color;
 uniform float     _Metallic;
 uniform float     _Roughness;
 uniform vec4      _EmissionColor;
+uniform vec3      uCamPos;
+uniform float     uAmbient;
+
+#define MAX_DIR_LIGHTS  4
+#define MAX_SPOT_LIGHTS 8
+
+uniform int   uDirCount;
+uniform vec3  uDirDir  [MAX_DIR_LIGHTS];
+uniform vec3  uDirColor[MAX_DIR_LIGHTS];
+
+uniform int   uSpotCount;
+uniform vec3  uSpotPos      [MAX_SPOT_LIGHTS];
+uniform vec3  uSpotDir      [MAX_SPOT_LIGHTS];
+uniform vec3  uSpotColor    [MAX_SPOT_LIGHTS];
+uniform float uSpotRange    [MAX_SPOT_LIGHTS];
+uniform float uSpotCosInner [MAX_SPOT_LIGHTS];
+uniform float uSpotCosOuter [MAX_SPOT_LIGHTS];
 
 out vec4 FragColor;
 
 void main()
 {{
-    vec4 albedo   = texture(_MainTex, vTexCoord) * _Color;
-    vec3 N        = normalize(vNormal);
-    vec3 lightDir = normalize(vec3(0.6, 1.0, 0.5));
-    float diff    = max(dot(N, lightDir), 0.0);
-    float ambient = 0.2;
+    vec4  albedo    = texture(_MainTex, vTexCoord) * _Color;
+    vec3  N         = normalize(vNormal);
+    vec3  V         = normalize(uCamPos - vFragPos);
+    float roughness = max(_Roughness, 0.01);
+    float shininess = mix(8.0, 256.0, 1.0 - roughness);
+
+    vec3 Lo = vec3(0.0);
+
+    // Directional lights
+    for (int i = 0; i < uDirCount; i++) {{
+        vec3  L    = normalize(-uDirDir[i]);
+        vec3  H    = normalize(L + V);
+        float diff = max(dot(N, L), 0.0);
+        float spec = pow(max(dot(N, H), 0.0), shininess);
+        Lo += albedo.rgb * diff * uDirColor[i]
+            + spec * uDirColor[i] * mix(0.04, 1.0, _Metallic);
+    }}
+
+    // Spot lights
+    for (int i = 0; i < uSpotCount; i++) {{
+        vec3  toFrag = vFragPos - uSpotPos[i];
+        float dist   = length(toFrag);
+
+        // Hard cutoff beyond range - no contribution outside range
+        if (dist >= uSpotRange[i]) continue;
+
+        // Check the fragment is inside the cone
+        float cosA = dot(normalize(toFrag), normalize(uSpotDir[i]));
+        float cone = smoothstep(uSpotCosOuter[i], uSpotCosInner[i], cosA);
+        if (cone <= 0.0) continue;
+
+        // Inverse square falloff - fades sharply with distance like a real light
+        // Normalised so attenuation = 1 at dist=0, fades to 0 at dist=Range
+        float normDist = dist / uSpotRange[i];
+        float atten = cone / (1.0 + 25.0 * normDist * normDist);
+
+        vec3  L    = normalize(-toFrag);
+        vec3  H    = normalize(L + V);
+        float diff = max(dot(N, L), 0.0);
+        float spec = pow(max(dot(N, H), 0.0), shininess);
+        Lo += (albedo.rgb * diff + spec * mix(0.04, 1.0, _Metallic))
+              * uSpotColor[i] * atten;
+    }}
+
     vec3 emission = _EmissionColor.rgb;
-    FragColor = vec4((ambient + diff) * albedo.rgb + emission, albedo.a);
+    vec3 col = albedo.rgb * uAmbient + Lo + emission;
+    FragColor = vec4(col, albedo.a);
 }}
+
+
+
 ";
 
         public static string PlainText() => "";
@@ -153,61 +209,35 @@ void main()
     }
 
     // ── Script project / solution generator ────────────────────────────────────
-    /// <summary>
-    /// Generates <c>.csproj</c> and <c>.sln</c> for a scripts folder so the user
-    /// can open and edit scripts in VS / Rider / VS Code with full engine access.
-    /// Called by <see cref="ElintriaEngine.UI.Panels.ProjectPanel"/> whenever a
-    /// new C# script is created, and by the BuildSystem before compiling.
-    /// No static project files are ever shipped – everything is generated here.
-    /// </summary>
     public static class ScriptProjectGenerator
     {
         private const string NetTarget = "net10.0";
 
-        // ── Main entry point ───────────────────────────────────────────────────
-        /// <summary>
-        /// Ensures a <c>GameScripts.csproj</c> and <c>GameScripts.sln</c> exist
-        /// in the same folder as <paramref name="scriptPath"/>.
-        /// Safe to call multiple times – the .csproj is always regenerated to pick
-        /// up new files, while the .sln is only written once.
-        /// </summary>
         public static void EnsureProjectForScript(string scriptPath, string projectRoot)
         {
             string scriptsDir = Path.GetDirectoryName(Path.GetFullPath(scriptPath))!;
             GenerateProject(scriptsDir, projectRoot);
         }
 
-        /// <summary>
-        /// Generates project files for every scripts directory found under
-        /// <paramref name="projectRoot"/>/Assets.
-        /// Called by the BuildSystem before compilation.
-        /// </summary>
         public static void GenerateAll(string projectRoot)
         {
             string assetsDir = Path.Combine(projectRoot, "Assets");
             if (!Directory.Exists(assetsDir)) return;
 
-            // Find all directories containing .cs files
             foreach (var dir in Directory.GetDirectories(assetsDir, "*", SearchOption.AllDirectories))
                 if (Directory.GetFiles(dir, "*.cs").Length > 0)
                     GenerateProject(dir, projectRoot);
 
-            // Also handle loose scripts directly in Assets
             if (Directory.GetFiles(assetsDir, "*.cs").Length > 0)
                 GenerateProject(assetsDir, projectRoot);
         }
 
-        // ── Core generator ─────────────────────────────────────────────────────
         private static void GenerateProject(string scriptsDir, string projectRoot)
         {
             const string projName = "GameScripts";
             string csprojPath = Path.Combine(scriptsDir, $"{projName}.csproj");
             string slnPath = Path.Combine(scriptsDir, $"{projName}.sln");
 
-            // Locate ElintriaEngine.dll – try several locations in priority order:
-            //   1. Next to the running executable (AppContext.BaseDirectory) – normal case
-            //   2. projectRoot/Engine/ – user-managed copy
-            //   3. projectRoot/../ – project is a sibling of the engine
             string? engineDll = null;
             var candidates = new[]
             {
@@ -217,31 +247,17 @@ void main()
             };
             foreach (var c in candidates)
                 if (File.Exists(c)) { engineDll = Path.GetFullPath(c); break; }
-
-            // Fall back to wherever it runs from so the .csproj is at least syntactically valid
             engineDll ??= Path.GetFullPath(
                 Path.Combine(AppContext.BaseDirectory, "ElintriaEngine.dll"));
 
-            string relDll = Path.GetRelativePath(scriptsDir, engineDll)
-                               .Replace('/', '\\');
-
+            string relDll = Path.GetRelativePath(scriptsDir, engineDll).Replace('/', '\\');
             WriteCsproj(csprojPath, projName, relDll);
             WriteSlnIfAbsent(slnPath, projName, csprojPath);
         }
 
-        // ── .csproj writer ────────────────────────────────────────────────────
         private static void WriteCsproj(string path, string projName, string relDll)
         {
-            // Always overwrite so new files are included automatically
             string xml = $@"<Project Sdk=""Microsoft.NET.Sdk"">
-
-  <!--
-    ╔═══════════════════════════════════════════════════════╗
-    ║  Elintria Engine  –  GameScripts project              ║
-    ║  Auto-generated by ScriptProjectGenerator.            ║
-    ║  Do NOT commit this file; it is re-generated on save. ║
-    ╚═══════════════════════════════════════════════════════╝
-  -->
 
   <PropertyGroup>
     <OutputType>Library</OutputType>
@@ -253,24 +269,20 @@ void main()
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <!--  Build output goes to a temp folder so the engine can hot-reload scripts  -->
     <OutputPath>$(MSBuildThisFileDirectory)..\..\.elintria\ScriptsBin\</OutputPath>
   </PropertyGroup>
 
-  <!-- ── Elintria Engine reference ─────────────────────────────────────── -->
   <ItemGroup>
     <Reference Include=""ElintriaEngine"">
       <HintPath>{relDll}</HintPath>
-      <Private>false</Private>   <!-- do not copy to output; engine provides it at runtime -->
+      <Private>false</Private>
     </Reference>
   </ItemGroup>
 
-  <!-- ── OpenTK (needed if scripts use math types directly) ──────────── -->
   <ItemGroup>
     <PackageReference Include=""OpenTK"" Version=""4.*"" />
   </ItemGroup>
 
-  <!-- ── Include all .cs files in this directory tree ─────────────────── -->
   <ItemGroup>
     <Compile Include=""**\*.cs"" />
   </ItemGroup>
@@ -280,17 +292,12 @@ void main()
             File.WriteAllText(path, xml, Encoding.UTF8);
         }
 
-        // ── .sln writer ───────────────────────────────────────────────────────
         private static void WriteSlnIfAbsent(string slnPath, string projName, string csprojPath)
         {
             if (File.Exists(slnPath)) return;
-
-            // Deterministic GUIDs based on project name so they're stable across machines
             Guid projGuid = DeterministicGuid(projName + ":project");
             Guid slnGuid = DeterministicGuid(projName + ":solution");
-
             string relCsproj = Path.GetFileName(csprojPath);
-
             string sln = $@"
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
@@ -314,7 +321,6 @@ Global
 	EndGlobalSection
 EndGlobal
 ".TrimStart();
-
             File.WriteAllText(slnPath, sln, Encoding.UTF8);
         }
 

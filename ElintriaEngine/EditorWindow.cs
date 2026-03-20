@@ -6,7 +6,7 @@ using OpenTK.Windowing.Desktop;
 using OpenTK.Windowing.GraphicsLibraryFramework;
 using ElintriaEngine.Rendering;
 using ElintriaEngine.UI;
-using ElintriaEngine.Core;
+using ElintriaEngine.Core; 
 
 namespace ElintriaEngine
 {
@@ -53,9 +53,12 @@ namespace ElintriaEngine
 
             // Always start with the project launcher — no bypass.
             ShowLauncher();
+            
+
 
 
             
+
         }
 
         protected override void OnUnload()
@@ -141,6 +144,13 @@ namespace ElintriaEngine
                 _renderer.EndFrame();
             }
 
+            /*this.KeyDown += e => Keyboard.OnKeyDown(Keyboard.GlfwToKey((int)e.Key));
+            this.KeyUp += e => Keyboard.OnKeyUp(Keyboard.GlfwToKey((int)e.Key));
+
+*/
+            Keyboard.PollWin32();
+
+
             SwapBuffers();
         }
 
@@ -188,7 +198,9 @@ namespace ElintriaEngine
 
         protected override void OnKeyDown(KeyboardKeyEventArgs e)
         {
-            base.OnKeyDown(e);
+            base.OnKeyDown(e); 
+
+
             if (e.Alt && e.Key == Keys.F4) { Close(); return; }
             _launcher?.OnKeyDown(e);
             _layout?.OnKeyDown(e);
@@ -196,7 +208,7 @@ namespace ElintriaEngine
 
         protected override void OnKeyUp(KeyboardKeyEventArgs e)
         {
-            base.OnKeyUp(e);
+            base.OnKeyUp(e); 
             _layout?.OnKeyUp(e);
         }
 

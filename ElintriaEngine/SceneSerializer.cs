@@ -146,25 +146,50 @@ namespace ElintriaEngine.Core
 
         private static SerializedComponent SerializeComponent(Component comp)
         {
-            var sc = new SerializedComponent
-            {
-                TypeName = comp.GetType().Name,
-                Enabled = comp.Enabled,
-            };
-
-            // Special case: DynamicScript stores user field values in a dict.
-            // Serialize each entry individually so refs survive the scene clone.
+            // If this is a DynamicScript placeholder, serialize it as-is.
             if (comp is DynamicScript ds)
             {
-                sc.Properties["ScriptTypeName"] = JsonValue.Create(ds.ScriptTypeName);
+                var dsSc = new SerializedComponent { TypeName = "DynamicScript", Enabled = comp.Enabled };
+                dsSc.Properties["ScriptTypeName"] = JsonValue.Create(ds.ScriptTypeName);
                 foreach (var kv in ds.FieldValues)
                 {
                     var node = ValueToNode(kv.Value, kv.Value?.GetType() ?? typeof(object));
                     if (node != null)
-                        sc.Properties["_fv_" + kv.Key] = node;
+                        dsSc.Properties["_fv_" + kv.Key] = node;
                 }
-                return sc;
+                return dsSc;
             }
+
+            // If this is a user script (upgraded from DynamicScript — not in the
+            // built-in registry) serialize it as DynamicScript so it can be
+            // reloaded correctly when the project is reopened before scripts compile.
+            string typeName = comp.GetType().Name;
+            bool isBuiltIn = ComponentRegistry.IsBuiltIn(typeName);
+            if (!isBuiltIn && comp is not DynamicScript)
+            {
+                var userSc = new SerializedComponent { TypeName = "DynamicScript", Enabled = comp.Enabled };
+                userSc.Properties["ScriptTypeName"] = JsonValue.Create(typeName);
+                // Serialize public fields as FieldValues
+                foreach (var fi in comp.GetType().GetFields(
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+                {
+                    try
+                    {
+                        var val = fi.GetValue(comp);
+                        var node = ValueToNode(val, fi.FieldType);
+                        if (node != null) userSc.Properties["_fv_" + fi.Name] = node;
+                    }
+                    catch { }
+                }
+                return userSc;
+            }
+
+            var sc = new SerializedComponent
+            {
+                TypeName = typeName,
+                Enabled = comp.Enabled,
+            };
+
 
             foreach (var fi in comp.GetType().GetFields(
                 BindingFlags.Public | BindingFlags.Instance | BindingFlags.FlattenHierarchy))

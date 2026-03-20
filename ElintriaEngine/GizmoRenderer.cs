@@ -385,12 +385,17 @@ void main(){ FragColor = uColor; }";
             var dir = dl.Direction.Normalized();
             var pos = go.Transform.LocalPosition;
 
-            int n = 12; float r = 0.55f;
+            // Use the light's actual color for the gizmo tint
+            var lightCol = new Vector4(dl.ColorR, dl.ColorG, dl.ColorB, 1f);
+
+            // Build perpendicular axes for the ring
             var perp = Vector3.Cross(dir, Vector3.UnitY);
             if (perp.LengthSquared < 0.01f) perp = Vector3.Cross(dir, Vector3.UnitX);
             perp.Normalize();
             var perp2 = Vector3.Cross(dir, perp).Normalized();
 
+            // Draw a ring at the light origin perpendicular to its direction
+            int n = 16; float r = 0.5f;
             var ring = new Vector3[n];
             for (int i = 0; i < n; i++)
             {
@@ -398,14 +403,25 @@ void main(){ FragColor = uColor; }";
                 ring[i] = pos + (perp * MathF.Cos(a) + perp2 * MathF.Sin(a)) * r;
             }
             for (int i = 0; i < n; i++)
-                Lines(vpMat, CDL, 2f, ring[i], ring[(i + 1) % n]);
+                Lines(vpMat, lightCol, 2f, ring[i], ring[(i + 1) % n]);
+
+            // Draw 8 parallel rays from the ring — these show the light direction clearly
+            float rayLen = 1.6f;
             for (int i = 0; i < 8; i++)
             {
                 float a = i * MathF.PI * 2f / 8;
                 var off = (perp * MathF.Cos(a) + perp2 * MathF.Sin(a)) * r;
-                Lines(vpMat, CDL, 1.5f, pos + off, pos + off + dir * 1.4f);
+                var start = pos + off;
+                var end = start + dir * rayLen;
+                Lines(vpMat, lightCol, 1.5f, start, end);
+                // Small arrowhead at end of each ray
+                var side = off.Normalized() * 0.07f;
+                Lines(vpMat, lightCol, 1.5f,
+                    end, end - dir * 0.15f + side,
+                    end, end - dir * 0.15f - side);
             }
-            DrawCrossIcon(vpMat, pos, CDL, camPos);
+
+            DrawCrossIcon(vpMat, pos, lightCol, camPos);
         }
 
         // ── Spotlight ─────────────────────────────────────────────────────────
@@ -414,38 +430,57 @@ void main(){ FragColor = uColor; }";
             var sl = go.GetComponent<SpotLight>()!;
             var dir = sl.Direction.Normalized();
             var pos = sl.Position;
-            float coneR = sl.Range * MathF.Tan(MathHelper.DegreesToRadians(sl.SpotAngle));
-            var tip = pos + dir * sl.Range;
 
+            // Use the light's actual color for the gizmo
+            var lightCol = new Vector4(sl.ColorR, sl.ColorG, sl.ColorB, 1f);
+            var lightColFade = new Vector4(sl.ColorR, sl.ColorG, sl.ColorB, 0.35f);
+
+            // Perpendicular axes for drawing circles
             var perp = Vector3.Cross(dir, Vector3.UnitY);
             if (perp.LengthSquared < 0.01f) perp = Vector3.Cross(dir, Vector3.UnitX);
             perp.Normalize();
             var perp2 = Vector3.Cross(dir, perp).Normalized();
 
-            int n = 20;
-            var ring = new Vector3[n];
+            // Outer cone tip ring at full range
+            float outerR = sl.Range * MathF.Tan(MathHelper.DegreesToRadians(sl.SpotAngle));
+            var coneBase = pos + dir * sl.Range;
+
+            int n = 24;
+            var outerRing = new Vector3[n];
             for (int i = 0; i < n; i++)
             {
                 float a = i * MathF.PI * 2f / n;
-                ring[i] = tip + (perp * MathF.Cos(a) + perp2 * MathF.Sin(a)) * coneR;
+                outerRing[i] = coneBase + (perp * MathF.Cos(a) + perp2 * MathF.Sin(a)) * outerR;
             }
             for (int i = 0; i < n; i++)
-                Lines(vpMat, CSL, 1.5f, ring[i], ring[(i + 1) % n]);
-            Lines(vpMat, CSL, 2f, pos, ring[0], pos, ring[n / 4], pos, ring[n / 2], pos, ring[3 * n / 4]);
+                Lines(vpMat, lightCol, 1.5f, outerRing[i], outerRing[(i + 1) % n]);
 
-            float innerR = sl.Range * 0.4f * MathF.Tan(MathHelper.DegreesToRadians(sl.SpotAngle));
-            var innerTip = pos + dir * sl.Range * 0.4f;
-            int ni = 12;
-            var iRing = new Vector3[ni];
+            // Four lines from apex to outer ring edge (the cone silhouette)
+            Lines(vpMat, lightCol, 2f,
+                pos, outerRing[0],
+                pos, outerRing[n / 4],
+                pos, outerRing[n / 2],
+                pos, outerRing[3 * n / 4]);
+
+            // Inner cone ring — shows the hard/soft blend edge
+            // Inner angle = SpotAngle * (1 - BlendFraction)
+            float innerAngle = sl.SpotAngle * (1f - Math.Clamp(sl.BlendFraction, 0f, 0.99f));
+            float innerR = sl.Range * MathF.Tan(MathHelper.DegreesToRadians(innerAngle));
+            var innerBase = pos + dir * sl.Range;
+            int ni = 24;
+            var innerRing = new Vector3[ni];
             for (int i = 0; i < ni; i++)
             {
                 float a = i * MathF.PI * 2f / ni;
-                iRing[i] = innerTip + (perp * MathF.Cos(a) + perp2 * MathF.Sin(a)) * innerR;
+                innerRing[i] = innerBase + (perp * MathF.Cos(a) + perp2 * MathF.Sin(a)) * innerR;
             }
             for (int i = 0; i < ni; i++)
-                Lines(vpMat, new Vector4(CSL.X, CSL.Y, CSL.Z, 0.4f), 1f,
-                    iRing[i], iRing[(i + 1) % ni]);
-            DrawCrossIcon(vpMat, pos, CSL, camPos);
+                Lines(vpMat, lightColFade, 1f, innerRing[i], innerRing[(i + 1) % ni]);
+
+            // Center axis line from apex to base (shows direction clearly)
+            Lines(vpMat, lightCol, 1.5f, pos, coneBase);
+
+            DrawCrossIcon(vpMat, pos, lightCol, camPos);
         }
 
         // ── Collider face-drag edit handles ───────────────────────────────────

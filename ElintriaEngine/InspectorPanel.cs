@@ -42,6 +42,9 @@ namespace ElintriaEngine.UI.Panels
 
         private bool _dropHighlight;
 
+        // Set when the inspector is showing a .mat asset directly (no real GO selected)
+        private bool _isMaterialPreview;
+
         // Fields rendered this frame (rebuilt each render)
         private readonly List<FieldRecord> _fields = new();
 
@@ -204,6 +207,32 @@ namespace ElintriaEngine.UI.Panels
         public void Inspect(GameObject? go)
         {
             _target = go;
+            _isMaterialPreview = false;
+            _editId = null;
+            _editBuf = "";
+            _showAddComp = false;
+            _fields.Clear();
+            ScrollOffset = 0;
+        }
+
+        /// <summary>
+        /// Show a .mat file's properties directly in the inspector.
+        /// Called when the user double-clicks a .mat in the Project panel.
+        /// Creates an internal fake GameObject — nothing is added to the scene.
+        /// </summary>
+        public void InspectMaterial(string matPath)
+        {
+            var fakeGO = new Core.GameObject("Material: " +
+                System.IO.Path.GetFileNameWithoutExtension(matPath));
+            var mr = new Core.MeshRenderer();
+            mr.MaterialPath = matPath;
+            // Attach without going through AddComponentByName so it doesn't
+            // pollute the scene or the ECS registry.
+            fakeGO.Components.Add(mr);
+            mr.GameObject = fakeGO;
+
+            _target = fakeGO;
+            _isMaterialPreview = true;
             _editId = null;
             _editBuf = "";
             _showAddComp = false;
@@ -262,21 +291,28 @@ namespace ElintriaEngine.UI.Panels
             float headerY = cr.Y;
             DrawObjectHeader(r, cr, ref headerY);
             DrawSeparator(r, cr, ref headerY);
-            DrawTransform(r, cr, ref headerY);
-            DrawSeparator(r, cr, ref headerY);
+            if (!_isMaterialPreview)
+            {
+                DrawTransform(r, cr, ref headerY);
+                DrawSeparator(r, cr, ref headerY);
+            }
             float fixedTopH = headerY - cr.Y; // height consumed by header+transform
             r.PopClip();
 
             // ── Add Component bar — pinned immediately below header/transform ──
-            var addBarRect = new RectangleF(cr.X, cr.Y + fixedTopH, cr.Width, AddCompBarH);
-            r.FillRect(addBarRect, Color.FromArgb(255, 34, 34, 38));
-            r.DrawLine(new PointF(addBarRect.X, addBarRect.Bottom),
-                       new PointF(addBarRect.Right, addBarRect.Bottom),
-                       Color.FromArgb(255, 55, 55, 62));
-            DrawAddComponentButton(r, addBarRect);
+            // Hidden in material-preview mode (no components to add to a fake GO).
+            if (!_isMaterialPreview)
+            {
+                var addBarRect = new RectangleF(cr.X, cr.Y + fixedTopH, cr.Width, AddCompBarH);
+                r.FillRect(addBarRect, Color.FromArgb(255, 34, 34, 38));
+                r.DrawLine(new PointF(addBarRect.X, addBarRect.Bottom),
+                           new PointF(addBarRect.Right, addBarRect.Bottom),
+                           Color.FromArgb(255, 55, 55, 62));
+                DrawAddComponentButton(r, addBarRect);
+            }
 
             // ── Scrollable components region — sits below the bar ─────────────
-            float compTop = cr.Y + fixedTopH + AddCompBarH;
+            float compTop = cr.Y + fixedTopH + (_isMaterialPreview ? 0f : AddCompBarH);
             var scrollCr = new RectangleF(cr.X, compTop, cr.Width, cr.Bottom - compTop);
 
             r.PushClip(scrollCr);
@@ -294,7 +330,7 @@ namespace ElintriaEngine.UI.Panels
             DrawScrollBar(r);
 
             // Add component popup drawn OUTSIDE clip so it's not cut off
-            if (_showAddComp) DrawAddCompPopup(r);
+            if (_showAddComp && !_isMaterialPreview) DrawAddCompPopup(r);
         }
 
         // ── Object header ──────────────────────────────────────────────────────
@@ -311,6 +347,31 @@ namespace ElintriaEngine.UI.Panels
             var row = new RectangleF(cr.X, y, cr.Width, 26f);
             r.FillRect(row, Color.FromArgb(255, 42, 42, 42));
 
+            if (_isMaterialPreview)
+            {
+                // ── Material asset header ─────────────────────────────────────
+                var icon = new RectangleF(cr.X + PAD, y + 5f, 16f, 16f);
+                r.FillRect(icon, Color.FromArgb(255, 60, 100, 180));
+                r.DrawRect(icon, Color.FromArgb(255, 100, 150, 230));
+                r.DrawText("M", new PointF(icon.X + 4f, icon.Y + 3f), Color.White, 8f);
+
+                r.DrawText(_target.Name, new PointF(cr.X + PAD + 22f, y + 7f),
+                    Color.FromArgb(255, 200, 220, 255), 12f);
+
+                // File path shown as a small subtitle
+                var mr2 = _target.GetComponent<Core.MeshRenderer>();
+                if (mr2 != null)
+                {
+                    string fileName = System.IO.Path.GetFileName(mr2.MaterialPath);
+                    r.DrawText(fileName, new PointF(cr.X + PAD + 22f, y + 20f),
+                        Color.FromArgb(140, 160, 160, 170), 8f);
+                }
+
+                y += 32f; ContentHeight += 32f;
+                return;
+            }
+
+            // ── Normal GameObject header ──────────────────────────────────────
             // Active checkbox
             var cb = new RectangleF(cr.X + PAD, y + 6f, 14f, 14f);
             r.FillRect(cb, _target.ActiveSelf ? Color.FromArgb(255, 55, 155, 55) : Color.FromArgb(255, 52, 52, 52));
@@ -385,7 +446,7 @@ namespace ElintriaEngine.UI.Panels
 
         private static string Truncate(string s, int max) =>
             s.Length <= max ? s : s[..max] + "…";
-         
+
 
         // ── Transform ─────────────────────────────────────────────────────────
         private void DrawTransform(IEditorRenderer r, RectangleF cr, ref float y)
@@ -581,18 +642,16 @@ namespace ElintriaEngine.UI.Panels
                     float gV = (float)(fG.GetValue(comp) ?? 0f);
                     float bV = (float)(fB.GetValue(comp) ?? 0f);
                     var c4v = new Color4(rV, gV, bV, 1f);
-                    DrawColorField(r, cr, "Color", c4v, ref y, cid + "_rgb");
-                    // Wire picker apply back to the three fields
-                    if (_colorPickerId == cid + "_rgb" && _cpApply == null)
-                    {
-                        _cpR = rV; _cpG = gV; _cpB = bV;
-                        _cpApply = (rv, gv, bv) =>
+                    // Capture field refs for the setter lambda
+                    var capturedR = fR; var capturedG = fG; var capturedB = fB;
+                    var capturedComp = comp;
+                    DrawColorField(r, cr, "Color", c4v, ref y, cid + "_rgb",
+                        (rv, gv, bv) =>
                         {
-                            fR.SetValue(comp, rv);
-                            fG.SetValue(comp, gv);
-                            fB.SetValue(comp, bv);
-                        };
-                    }
+                            capturedR.SetValue(capturedComp, rv);
+                            capturedG.SetValue(capturedComp, gv);
+                            capturedB.SetValue(capturedComp, bv);
+                        });
                 }
             }
 
@@ -1069,6 +1128,14 @@ namespace ElintriaEngine.UI.Panels
         private void DrawMeshRendererInspector(IEditorRenderer r, RectangleF cr,
             Core.MeshRenderer mr, string cid, ref float y)
         {
+            // When showing a .mat asset directly, skip the component boilerplate
+            // and go straight to the material editor.
+            if (_isMaterialPreview && !string.IsNullOrEmpty(mr.MaterialPath))
+            {
+                DrawMaterialAssetInspector(r, cr, mr.MaterialPath, cid, ref y);
+                return;
+            }
+
             DrawBoolField(r, cr, "Enabled", mr.Enabled, ref y, cid + "_en", v => mr.Enabled = v);
             DrawBoolField(r, cr, "Cast Shadows", mr.CastShadows, ref y, cid + "_cs", v => mr.CastShadows = v);
             DrawBoolField(r, cr, "Recv Shadows", mr.ReceiveShadows, ref y, cid + "_rs", v => mr.ReceiveShadows = v);
@@ -1095,12 +1162,8 @@ namespace ElintriaEngine.UI.Panels
                     ? Color.FromArgb(160, 140, 140, 150)
                     : Color.FromArgb(255, 200, 220, 255), 9f);
 
-            // Register for drag-drop
             _fields.Add(new FieldRecord(matRect, cid + "_mat", mr.MaterialPath,
-                typeof(string), nv => {
-                    if (nv is string s) mr.MaterialPath = s;
-                }));
-            // Also register a click to open a simple file-picker
+                typeof(string), nv => { if (nv is string s) mr.MaterialPath = s; }));
             RegisterClick(matBtn, cid + "_matbtn", () => PickMaterialFile(mr));
             RegisterClick(matRect, cid + "_matrect", () => PickMaterialFile(mr));
             y += FH; ContentHeight += FH;
@@ -1116,37 +1179,117 @@ namespace ElintriaEngine.UI.Panels
             }
             else
             {
-                // ── Shader property fields from the .mat asset ────────────────
-                DrawMaterialPropertyFields(r, cr, mr, cid, ref y);
+                DrawMaterialAssetInspector(r, cr, mr.MaterialPath, cid, ref y);
             }
 
             r.DrawLine(new PointF(cr.X, y), new PointF(cr.Right, y), Color.FromArgb(255, 50, 50, 50));
             y += 3f; ContentHeight += 3f;
         }
 
-        private void DrawMaterialPropertyFields(IEditorRenderer r, RectangleF cr,
-            Core.MeshRenderer mr, string cid, ref float y)
+        // ── Full material asset inspector ─────────────────────────────────────
+        // Called both from DrawMeshRendererInspector (when a .mat is assigned)
+        // and directly when a .mat is double-clicked in the Project panel.
+        // Draws: Shader slot (editable) → separator → all shader property fields.
+        private void DrawMaterialAssetInspector(IEditorRenderer r, RectangleF cr,
+            string matPath, string cid, ref float y)
         {
-            if (string.IsNullOrEmpty(mr.MaterialPath) || !System.IO.File.Exists(mr.MaterialPath))
-                return;
-
-            var asset = Core.MaterialCache.Get(mr.MaterialPath);
-
-            // Reload declared properties from the shader if not yet populated
-            if (asset.DeclaredProperties.Count == 0 && !string.IsNullOrEmpty(asset.ShaderPath)
-                && System.IO.File.Exists(asset.ShaderPath))
+            if (string.IsNullOrEmpty(matPath) || !System.IO.File.Exists(matPath))
             {
-                string src = System.IO.File.ReadAllText(asset.ShaderPath);
-                asset.DeclaredProperties.AddRange(Core.MaterialAsset.ParseShaderProperties(src));
-            }
-
-            if (asset.DeclaredProperties.Count == 0)
-            {
-                r.DrawText("No shader properties declared.", new PointF(cr.X + PAD, y + 3f), ColTextDim, 9f);
+                r.DrawText("Material file not found.", new PointF(cr.X + PAD, y + 3f),
+                    Color.FromArgb(255, 200, 80, 80), 9f);
                 y += 18f; ContentHeight += 18f;
                 return;
             }
 
+            var asset = Core.MaterialCache.Get(matPath);
+
+            // ── Shader slot ───────────────────────────────────────────────────
+            DrawLabel(r, cr, "Shader", y);
+            float fw = cr.Width - LW - PAD;
+            const float BtnW = 18f;
+            var shaderRect = new RectangleF(cr.X + LW, y + 2f, fw - BtnW - 1f, FH - 4f);
+            var shaderBtn = new RectangleF(shaderRect.Right + 1f, y + 2f, BtnW, FH - 4f);
+
+            bool shHover = _mouse.X >= shaderRect.X && _mouse.X <= shaderRect.Right
+                        && _mouse.Y >= shaderRect.Y && _mouse.Y <= shaderRect.Bottom;
+            r.FillRect(shaderRect, shHover ? Color.FromArgb(255, 40, 70, 120) : Color.FromArgb(255, 38, 38, 44));
+            r.DrawRect(shaderRect, shHover ? Color.FromArgb(255, 80, 140, 255) : ColBorder);
+            r.FillRect(shaderBtn, Color.FromArgb(255, 48, 52, 62));
+            r.DrawRect(shaderBtn, ColBorder);
+            r.DrawText("⊙", new PointF(shaderBtn.X + 3f, shaderBtn.Y + 2f),
+                Color.FromArgb(200, 120, 195, 255), 9f);
+
+            string shaderDisplay = string.IsNullOrEmpty(asset.ShaderPath)
+                ? "Standard"
+                : System.IO.Path.GetFileNameWithoutExtension(asset.ShaderPath);
+            r.DrawText(shaderDisplay, new PointF(shaderRect.X + 4f, shaderRect.Y + 3f),
+                string.IsNullOrEmpty(asset.ShaderPath)
+                    ? Color.FromArgb(200, 160, 175, 200)
+                    : Color.FromArgb(255, 180, 215, 255), 9f);
+
+            // Clicking either area opens a file picker for .shader files
+            string capturedPath = matPath;
+            Action pickShader = () =>
+            {
+                string initDir = string.IsNullOrEmpty(ProjectRoot) ? "" :
+                    System.IO.Path.Combine(ProjectRoot, "Assets");
+                string? picked = Core.NativeDialog.OpenFile(
+                    "Select Shader", "Shader files (*.shader)|*.shader", initDir);
+                if (string.IsNullOrEmpty(picked)) return;
+
+                // Update shader path, repopulate declared properties, save
+                asset.ShaderPath = picked;
+                asset.DeclaredProperties.Clear();
+                try
+                {
+                    string src = System.IO.File.ReadAllText(picked);
+                    asset.DeclaredProperties.AddRange(Core.MaterialAsset.ParseShaderProperties(src));
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Inspector] Shader parse error: {ex.Message}");
+                }
+                try { asset.Save(capturedPath); } catch { }
+                Core.MaterialCache.Invalidate(capturedPath);
+                SceneView?.Renderer.InvalidateMaterial(capturedPath);
+            };
+            RegisterClick(shaderRect, cid + "_shaderrect", pickShader);
+            RegisterClick(shaderBtn, cid + "_shaderbtn", pickShader);
+            y += FH; ContentHeight += FH;
+
+            // Separator between shader slot and properties
+            DrawSeparator(r, cr, ref y);
+
+            // ── Ensure declared properties are populated ──────────────────────
+            if (asset.DeclaredProperties.Count == 0)
+            {
+                // Try to load from the assigned shader file
+                if (!string.IsNullOrEmpty(asset.ShaderPath) &&
+                    System.IO.File.Exists(asset.ShaderPath))
+                {
+                    try
+                    {
+                        string src = System.IO.File.ReadAllText(asset.ShaderPath);
+                        asset.DeclaredProperties.AddRange(
+                            Core.MaterialAsset.ParseShaderProperties(src));
+                    }
+                    catch { }
+                }
+
+                // Fall back to Standard built-ins when no shader is assigned
+                if (asset.DeclaredProperties.Count == 0)
+                    asset.DeclaredProperties.AddRange(Core.MaterialAsset.StandardProperties);
+            }
+
+            if (asset.DeclaredProperties.Count == 0)
+            {
+                r.DrawText("No shader properties declared.",
+                    new PointF(cr.X + PAD, y + 3f), ColTextDim, 9f);
+                y += 18f; ContentHeight += 18f;
+                return;
+            }
+
+            // ── Property fields ───────────────────────────────────────────────
             bool dirty = false;
             foreach (var prop in asset.DeclaredProperties)
             {
@@ -1175,14 +1318,14 @@ namespace ElintriaEngine.UI.Panels
                         {
                             float def = prop.DefaultValue is float f ? f : prop.Min;
                             float cur = asset.Properties.GetFloat(prop.Name, def);
-                            DrawRangeField(r, cr, prop.DisplayName, cur, prop.Min, prop.Max, ref y, pid, nv => {
-                                asset.Properties.Set(prop.Name, nv); dirty = true;
-                            });
+                            DrawRangeField(r, cr, prop.DisplayName, cur, prop.Min, prop.Max,
+                                ref y, pid, nv => { asset.Properties.Set(prop.Name, nv); dirty = true; });
                             break;
                         }
                     case Core.ShaderPropType.Color:
                         {
-                            var def = prop.DefaultValue is OpenTK.Mathematics.Vector4 dv ? dv : OpenTK.Mathematics.Vector4.One;
+                            var def = prop.DefaultValue is OpenTK.Mathematics.Vector4 dv
+                                ? dv : OpenTK.Mathematics.Vector4.One;
                             var cur = asset.Properties.GetColor(prop.Name, def);
                             DrawColorVec4Field(r, cr, prop.DisplayName, cur, ref y, pid, nv => {
                                 asset.Properties.Set(prop.Name, nv); dirty = true;
@@ -1191,7 +1334,8 @@ namespace ElintriaEngine.UI.Panels
                         }
                     case Core.ShaderPropType.Vector:
                         {
-                            var def = prop.DefaultValue is OpenTK.Mathematics.Vector4 dv ? dv : OpenTK.Mathematics.Vector4.Zero;
+                            var def = prop.DefaultValue is OpenTK.Mathematics.Vector4 dv
+                                ? dv : OpenTK.Mathematics.Vector4.Zero;
                             var cur = asset.Properties.GetVector(prop.Name, def);
                             DrawVec4Field(r, cr, prop.DisplayName, cur, ref y, pid, nv => {
                                 asset.Properties.Set(prop.Name, nv); dirty = true;
@@ -1209,13 +1353,13 @@ namespace ElintriaEngine.UI.Panels
                 }
             }
 
-            // Auto-save .mat whenever a value changes
+            // Auto-save whenever any value changes
             if (dirty)
             {
-                try { asset.Save(mr.MaterialPath); }
+                try { asset.Save(matPath); }
                 catch (Exception ex) { Console.WriteLine($"[Inspector] Mat save: {ex.Message}"); }
-                Core.MaterialCache.Invalidate(mr.MaterialPath);
-                SceneView?.Renderer.InvalidateMaterial(mr.MaterialPath);
+                Core.MaterialCache.Invalidate(matPath);
+                SceneView?.Renderer.InvalidateMaterial(matPath);
             }
         }
 
@@ -1264,21 +1408,47 @@ namespace ElintriaEngine.UI.Panels
         }
 
         // ── Color (Vector4 RGBA) field ────────────────────────────────────────
+        // Clicking the swatch opens the inline HSV picker (same as Color4 fields).
         private void DrawColorVec4Field(IEditorRenderer r, RectangleF cr, string label,
             OpenTK.Mathematics.Vector4 value, ref float y, string id,
             Action<OpenTK.Mathematics.Vector4> setter)
         {
             DrawLabel(r, cr, label, y);
             float fw = cr.Width - LW - PAD;
+            // Use "color_swatch_" prefix so OnMouseDown opens the picker
+            string swatchId = "color_swatch_" + id;
             var swatch = new RectangleF(cr.X + LW, y + 2f, fw, FH - 4f);
+
+            bool pickerOpen = _colorPickerId == id;
             r.FillRect(swatch, Color.FromArgb(
                 (int)(value.W * 255), (int)(value.X * 255),
                 (int)(value.Y * 255), (int)(value.Z * 255)));
-            r.DrawRect(swatch, ColBorder);
-            r.DrawText($"R:{value.X:F2} G:{value.Y:F2} B:{value.Z:F2} A:{value.W:F2}",
+            r.DrawRect(swatch, pickerOpen ? ColAccent : ColBorder);
+            r.DrawText($"R:{value.X:F2}  G:{value.Y:F2}  B:{value.Z:F2}  A:{value.W:F2}",
                 new PointF(swatch.X + 4f, swatch.Y + 3f), Color.White, 8f);
-            _fields.Add(new FieldRecord(swatch, id, value, typeof(OpenTK.Mathematics.Vector4),
-                obj => { if (obj is OpenTK.Mathematics.Vector4 v) setter(v); }));
+
+            // Store as Color4 so the color_swatch_ click handler in OnMouseDown can read it
+            _fields.Add(new FieldRecord(swatch, swatchId,
+                new Color4(value.X, value.Y, value.Z, value.W),
+                typeof(Color4),
+                obj => {
+                    if (obj is Color4 c) setter(new OpenTK.Mathematics.Vector4(c.R, c.G, c.B, c.A));
+                }));
+
+            // If this picker is open, draw the inline picker and advance y
+            if (pickerOpen)
+            {
+                // Wire _cpApply to call setter with the current RGB + original alpha
+                float alpha = value.W;
+                _cpApply = (rv, gv, bv) =>
+                    setter(new OpenTK.Mathematics.Vector4(rv, gv, bv, alpha));
+                y += FH;
+                DrawColorPicker(r, cr, ref y);
+                // Don't advance y again — DrawColorPicker already did
+                ContentHeight += FH;
+                return;
+            }
+
             y += FH; ContentHeight += FH;
         }
 
@@ -1623,17 +1793,29 @@ namespace ElintriaEngine.UI.Panels
         }
 
         private void DrawColorField(IEditorRenderer r, RectangleF cr, string label,
-            Color4 value, ref float y, string id)
+            Color4 value, ref float y, string id,
+            Action<float, float, float>? rgbSetter = null)
         {
             DrawLabel(r, cr, label, y);
+            bool pickerOpen = _colorPickerId == id;
             var swatch = new RectangleF(cr.X + LW, y + 2f, cr.Width - LW - PAD, FH - 4f);
             r.FillRect(swatch, Color.FromArgb(
                 (int)(value.A * 255), (int)(value.R * 255),
                 (int)(value.G * 255), (int)(value.B * 255)));
-            r.DrawRect(swatch, ColBorder);
-            // Register as clickable
+            r.DrawRect(swatch, pickerOpen ? ColAccent : ColBorder);
+            // Store the real rgb setter so OnMouseDown can wire _cpApply correctly
             _fields.Add(new FieldRecord(swatch, "color_swatch_" + id,
-                value, typeof(Color4), _ => { }));
+                value, typeof(Color4),
+                obj => { if (obj is Color4 c && rgbSetter != null) rgbSetter(c.R, c.G, c.B); }));
+            if (pickerOpen)
+            {
+                if (_cpApply == null && rgbSetter != null)
+                    _cpApply = rgbSetter;
+                y += FH;
+                DrawColorPicker(r, cr, ref y);
+                ContentHeight += FH;
+                return;
+            }
             y += FH; ContentHeight += FH;
         }
 
@@ -1906,7 +2088,7 @@ namespace ElintriaEngine.UI.Panels
             }
 
             // ── Tag dropdown selection ─────────────────────────────────────────
-            if (_showTagDropdown && _target != null)
+            if (!_isMaterialPreview && _showTagDropdown && _target != null)
             {
                 var tl = Core.TagsAndLayers.Instance;
                 for (int i = 0; i < tl.Tags.Count; i++)
@@ -1918,7 +2100,7 @@ namespace ElintriaEngine.UI.Panels
                 _showTagDropdown = false; return;
             }
             // ── Layer dropdown selection ───────────────────────────────────────
-            if (_showLayerDropdown && _target != null)
+            if (!_isMaterialPreview && _showLayerDropdown && _target != null)
             {
                 var tl = Core.TagsAndLayers.Instance;
                 for (int i = 0; i < tl.Layers.Count; i++)
@@ -1930,7 +2112,7 @@ namespace ElintriaEngine.UI.Panels
                 _showLayerDropdown = false; return;
             }
             // Toggle tag/layer dropdowns via header buttons
-            if (_target != null && e.Button == MouseButton.Left)
+            if (!_isMaterialPreview && _target != null && e.Button == MouseButton.Left)
             {
                 if (_tagBtnRect.Contains(pos))
                 { _showTagDropdown = !_showTagDropdown; _showLayerDropdown = false; return; }
@@ -1939,7 +2121,7 @@ namespace ElintriaEngine.UI.Panels
             }
 
             // Add component popup
-            if (_showAddComp)
+            if (!_isMaterialPreview && _showAddComp)
             {
                 _compMatches.Clear();
                 foreach (var name in AllComponents)

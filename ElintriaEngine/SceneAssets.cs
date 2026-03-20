@@ -284,7 +284,20 @@ namespace ElintriaEngine.Rendering.Scene
         public float Roughness { get; set; } = 0.5f;
         public bool Wireframe { get; set; } = false;
 
-        private readonly Dictionary<string, Texture2D> _texCache = new();
+        // Static texture cache shared across all Material instances.
+        // Cleared via Material.EvictTexture(path) when a material is invalidated.
+        private static readonly Dictionary<string, Texture2D> _texCache = new(StringComparer.OrdinalIgnoreCase);
+
+        public static void EvictTexture(string path)
+        {
+            if (_texCache.Remove(path, out var t)) t.Dispose();
+        }
+
+        public static void ClearTextureCache()
+        {
+            foreach (var t in _texCache.Values) t.Dispose();
+            _texCache.Clear();
+        }
 
         public Material(SceneShader shader) => Shader = shader;
 
@@ -293,10 +306,11 @@ namespace ElintriaEngine.Rendering.Scene
             SetPolygonMode();
             Shader.Use();
             AlbedoMap.Bind(0);
-            Shader.SetInt("uAlbedo", 0);
-            Shader.SetVec4("uColor", Color);
-            Shader.SetFloat("uMetallic", Metallic);
-            Shader.SetFloat("uRoughness", Roughness);
+            Shader.SetInt("_MainTex", 0);
+            Shader.SetVec4("_Color", Color);
+            Shader.SetFloat("_Metallic", Metallic);
+            Shader.SetFloat("_Roughness", Roughness);
+            Shader.SetVec4("_EmissionColor", Vector4.Zero);
         }
 
         /// <summary>
@@ -345,10 +359,11 @@ namespace ElintriaEngine.Rendering.Scene
             if (asset.DeclaredProperties.Count == 0)
             {
                 AlbedoMap.Bind(0);
-                Shader.SetInt("uAlbedo", 0);
-                Shader.SetVec4("uColor", Color);
-                Shader.SetFloat("uMetallic", Metallic);
-                Shader.SetFloat("uRoughness", Roughness);
+                Shader.SetInt("_MainTex", 0);
+                Shader.SetVec4("_Color", Color);
+                Shader.SetFloat("_Metallic", Metallic);
+                Shader.SetFloat("_Roughness", Roughness);
+                Shader.SetVec4("_EmissionColor", Vector4.Zero);
             }
         }
 
@@ -381,8 +396,8 @@ namespace ElintriaEngine.Rendering.Scene
 
         public void Dispose()
         {
+            // Note: _texCache is static and shared; dispose via ClearTextureCache().
             Shader?.Dispose();
-            foreach (var t in _texCache.Values) t.Dispose();
         }
     }
 
@@ -420,17 +435,19 @@ in vec3 vWorldPos;
 in vec3 vNormal;
 in vec2 vUV;
 
-uniform sampler2D uAlbedo;
-uniform vec4  uColor;
-uniform float uMetallic;
-uniform float uRoughness;
+// Material properties - same names as declared in .shader Properties blocks
+uniform sampler2D _MainTex;
+uniform vec4  _Color;
+uniform float _Metallic;
+uniform float _Roughness;
+uniform vec4  _EmissionColor;
 uniform vec3  uCamPos;
 
 // -- Directional lights --
 #define MAX_DIR_LIGHTS 4
 uniform int  uDirCount;
-uniform vec3 uDirDir  [MAX_DIR_LIGHTS];   // world-space direction (points away from light)
-uniform vec3 uDirColor[MAX_DIR_LIGHTS];   // pre-multiplied by intensity
+uniform vec3 uDirDir  [MAX_DIR_LIGHTS];
+uniform vec3 uDirColor[MAX_DIR_LIGHTS];
 
 // -- Spot lights --
 #define MAX_SPOT_LIGHTS 8
@@ -439,54 +456,50 @@ uniform vec3  uSpotPos      [MAX_SPOT_LIGHTS];
 uniform vec3  uSpotDir      [MAX_SPOT_LIGHTS];
 uniform vec3  uSpotColor    [MAX_SPOT_LIGHTS];
 uniform float uSpotRange    [MAX_SPOT_LIGHTS];
-uniform float uSpotCosInner [MAX_SPOT_LIGHTS];  // cos(half inner angle)
-uniform float uSpotCosOuter [MAX_SPOT_LIGHTS];  // cos(half outer angle)
+uniform float uSpotCosInner [MAX_SPOT_LIGHTS];
+uniform float uSpotCosOuter [MAX_SPOT_LIGHTS];
 
-// Ambient when no lights are present
 uniform float uAmbient;
 
 out vec4 FragColor;
 
 void main(){
-    vec4  albedo   = texture(uAlbedo, vUV) * uColor;
-    vec3  N        = normalize(vNormal);
-    vec3  V        = normalize(uCamPos - vWorldPos);
-    float roughness = max(uRoughness, 0.01);
+    vec4  albedo    = texture(_MainTex, vUV) * _Color;
+    vec3  N         = normalize(vNormal);
+    vec3  V         = normalize(uCamPos - vWorldPos);
+    float roughness = max(_Roughness, 0.01);
     float shininess = mix(8.0, 256.0, 1.0 - roughness);
 
     vec3 Lo = vec3(0.0);
 
-    // -- Directional lights --
     for (int i = 0; i < uDirCount; i++) {
         vec3  L    = normalize(-uDirDir[i]);
         vec3  H    = normalize(L + V);
         float diff = max(dot(N, L), 0.0);
         float spec = pow(max(dot(N, H), 0.0), shininess);
         Lo += albedo.rgb * diff * uDirColor[i]
-            + spec * uDirColor[i] * mix(0.04, 1.0, uMetallic);
+            + spec * uDirColor[i] * mix(0.04, 1.0, _Metallic);
     }
 
-    // -- Spot lights --
     for (int i = 0; i < uSpotCount; i++) {
         vec3  toFrag = vWorldPos - uSpotPos[i];
         float dist   = length(toFrag);
-        if (dist > uSpotRange[i]) continue;
-
-        vec3  L      = normalize(-toFrag);
+        if (dist >= uSpotRange[i]) continue;
         float cosA   = dot(normalize(toFrag), normalize(uSpotDir[i]));
         float cone   = smoothstep(uSpotCosOuter[i], uSpotCosInner[i], cosA);
         if (cone <= 0.0) continue;
-
-        float atten  = cone * (1.0 - dist / uSpotRange[i]);
+        float normDist = dist / uSpotRange[i];
+        float atten  = cone / (1.0 + 25.0 * normDist * normDist);
+        vec3  L      = normalize(-toFrag);
         vec3  H      = normalize(L + V);
         float diff   = max(dot(N, L), 0.0);
         float spec   = pow(max(dot(N, H), 0.0), shininess);
-        Lo += (albedo.rgb * diff + spec * mix(0.04, 1.0, uMetallic))
+        Lo += (albedo.rgb * diff + spec * mix(0.04, 1.0, _Metallic))
               * uSpotColor[i] * atten;
     }
 
-    // -- Ambient --
-    vec3 col = albedo.rgb * uAmbient + Lo;
+    vec3 emission = _EmissionColor.rgb;
+    vec3 col = albedo.rgb * uAmbient + Lo + emission;
     FragColor = vec4(col, albedo.a);
 }";
 

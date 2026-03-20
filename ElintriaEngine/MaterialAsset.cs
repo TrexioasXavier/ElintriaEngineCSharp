@@ -1,305 +1,381 @@
-﻿using System;
+﻿using ElintriaEngine.Rendering.Scene;
+using OpenTK.Mathematics;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using OpenTK.Mathematics;
+using System.Text.RegularExpressions;
 
 namespace ElintriaEngine.Core
 {
-    // ── Property types (mirrors Unity) ────────────────────────────────────────
-    public enum ShaderPropType { Float, Int, Color, Vector, Texture2D, Range }
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  ShaderPropType
+    //  Used by InspectorPanel.DrawMaterialPropertyFields switch statement.
+    // ═══════════════════════════════════════════════════════════════════════════
+    public enum ShaderPropType { Float, Int, Range, Color, Vector, Texture2D }
 
-    // ── A single declared property from the shader's Properties block ─────────
-    public class ShaderProperty
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  ShaderPropDecl
+    //  One property parsed from the Properties { } block of a .shader file.
+    //  InspectorPanel accesses: Name, DisplayName, Type, DefaultValue, Min, Max
+    // ═══════════════════════════════════════════════════════════════════════════
+    public class ShaderPropDecl
     {
-        public string Name { get; set; } = "";
-        public string DisplayName { get; set; } = "";
-        public ShaderPropType Type { get; set; } = ShaderPropType.Float;
-        public float Min { get; set; } = 0f;   // for Range
-        public float Max { get; set; } = 1f;   // for Range
-        public object? DefaultValue { get; set; }         // float/int/Vector4/string("")
+        public string Name { get; init; } = "";
+        public string DisplayName { get; init; } = "";
+        public ShaderPropType Type { get; init; }
+        public object? DefaultValue { get; init; }
+        public float Min { get; init; } = 0f;
+        public float Max { get; init; } = 1f;
     }
 
-    // ── Runtime value store for one material instance ─────────────────────────
-    public class MaterialPropertyBlock
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  MaterialProperties
+    //  Typed value store for one material instance.
+    //  InspectorPanel calls: GetFloat, GetInt, GetColor, GetVector, GetTexture, Set
+    // ═══════════════════════════════════════════════════════════════════════════
+    public class MaterialProperties
     {
-        private readonly Dictionary<string, object?> _values = new();
+        private readonly Dictionary<string, object?> _d = new();
 
-        public void Set(string name, object? value) => _values[name] = value;
+        public float GetFloat(string n, float def = 0f) =>
+            _d.TryGetValue(n, out var v) ? v switch
+            { float f => f, double d => (float)d, int i => i, _ => def } : def;
 
-        public float GetFloat(string name, float def = 0f) => _values.TryGetValue(name, out var v) && v is float f ? f : def;
-        public int GetInt(string name, int def = 0) => _values.TryGetValue(name, out var v) && v is int i ? i : def;
-        public Vector4 GetColor(string name, Vector4 def = default) => _values.TryGetValue(name, out var v) && v is Vector4 c ? c : def;
-        public Vector4 GetVector(string name, Vector4 def = default) => _values.TryGetValue(name, out var v) && v is Vector4 c ? c : def;
-        public string GetTexture(string name, string def = "") => _values.TryGetValue(name, out var v) && v is string s ? s : def;
-        public bool Has(string name) => _values.ContainsKey(name);
+        public int GetInt(string n, int def = 0) =>
+            _d.TryGetValue(n, out var v) ? v switch
+            { int i => i, float f => (int)f, double d => (int)d, _ => def } : def;
 
-        public IEnumerable<(string Key, object? Val)> All()
+        public Vector4 GetColor(string n, Vector4 def = default) =>
+            _d.TryGetValue(n, out var v) && v is Vector4 c ? c : def;
+
+        public Vector4 GetVector(string n, Vector4 def = default) => GetColor(n, def);
+
+        public string GetTexture(string n, string def = "") =>
+            _d.TryGetValue(n, out var v) && v is string s ? s : def;
+
+        public void Set(string n, object? v) => _d[n] = v;
+
+        public bool Has(string n) => _d.ContainsKey(n);
+
+        // ── JSON I/O ──────────────────────────────────────────────────────────
+        internal void LoadFromJson(JsonObject obj)
         {
-            foreach (var kv in _values) yield return (kv.Key, kv.Value);
+            foreach (var kv in obj) _d[kv.Key] = ParseNode(kv.Value);
         }
 
-        public void CopyFrom(MaterialPropertyBlock other)
+        internal JsonObject ToJson()
         {
-            foreach (var (k, v) in other.All()) _values[k] = v;
+            var o = new JsonObject();
+            foreach (var kv in _d)
+                switch (kv.Value)
+                {
+                    case float f: o[kv.Key] = JsonValue.Create(f); break;
+                    case int i: o[kv.Key] = JsonValue.Create(i); break;
+                    case double d: o[kv.Key] = JsonValue.Create((float)d); break;
+                    case Vector4 v: o[kv.Key] = new JsonArray(v.X, v.Y, v.Z, v.W); break;
+                    case string s: o[kv.Key] = JsonValue.Create(s); break;
+                }
+            return o;
+        }
+
+        private static object? ParseNode(JsonNode? n)
+        {
+            if (n is JsonArray a)
+            {
+                float x = a.Count > 0 ? a[0]?.GetValue<float>() ?? 0f : 0f;
+                float y = a.Count > 1 ? a[1]?.GetValue<float>() ?? 0f : 0f;
+                float z = a.Count > 2 ? a[2]?.GetValue<float>() ?? 0f : 0f;
+                float w = a.Count > 3 ? a[3]?.GetValue<float>() ?? 1f : 1f;
+                return new Vector4(x, y, z, w);
+            }
+            if (n is JsonValue jv)
+            {
+                if (jv.TryGetValue(out float f)) return f;
+                if (jv.TryGetValue(out double d)) return (float)d;
+                if (jv.TryGetValue(out int i)) return i;
+                if (jv.TryGetValue(out string? s)) return s;
+            }
+            return null;
         }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    //  MaterialAsset  —  the .mat file in the project
+    //  MaterialAsset
+    //
+    //  Loaded / saved from a .mat JSON file.
+    //
+    //  InspectorPanel uses:
+    //    asset.ShaderPath
+    //    asset.Properties   (MaterialProperties)
+    //    asset.DeclaredProperties  (List<ShaderPropDecl>, populated by MaterialCache)
+    //    asset.Save(path)
+    //    MaterialAsset.ParseShaderProperties(src)  — static, parses .shader source
+    //
+    //  .mat file format (new):
+    //  {
+    //    "shader": "Assets/Shaders/Foo.shader",
+    //    "properties": { "_Color": [1,1,1,1], "_Metallic": 0.0, "_MainTex": "" }
+    //  }
+    //
+    //  Legacy flat format (albedo/metallic/roughness keys at root) is auto-migrated.
     // ═══════════════════════════════════════════════════════════════════════════
-    /// <summary>
-    /// Represents a .mat asset file.  Stores:
-    ///   - ShaderPath: path to the .shader file (or built-in name like "Standard")
-    ///   - Properties: per-instance overrides of shader-declared uniforms
-    ///   - ParsedProperties: the shader's declared property list (filled at load time)
-    /// </summary>
     public class MaterialAsset
     {
-        // ── Persistent data ───────────────────────────────────────────────────
         public string ShaderPath { get; set; } = "Standard";
-        public MaterialPropertyBlock Properties { get; } = new();
+        public MaterialProperties Properties { get; } = new();
+        public List<ShaderPropDecl> DeclaredProperties { get; } = new();
+        public string? FilePath { get; private set; }
 
-        // ── Runtime data (not serialized) ─────────────────────────────────────
-        /// <summary>Declared properties parsed from the shader file.</summary>
-        public List<ShaderProperty> DeclaredProperties { get; } = new();
-
-        // ── IO ────────────────────────────────────────────────────────────────
-        private static readonly JsonSerializerOptions _opts =
-            new() { WriteIndented = true };
-
+        // ── Load ──────────────────────────────────────────────────────────────
         public static MaterialAsset Load(string filePath)
         {
-            var mat = new MaterialAsset();
+            var mat = new MaterialAsset { FilePath = filePath };
             if (!File.Exists(filePath)) return mat;
-
             try
             {
                 var root = JsonNode.Parse(File.ReadAllText(filePath));
                 if (root == null) return mat;
-
                 mat.ShaderPath = root["shader"]?.GetValue<string>() ?? "Standard";
-
-                var props = root["properties"]?.AsObject();
-                if (props != null)
-                {
-                    foreach (var kv in props)
-                    {
-                        var val = NodeToValue(kv.Value);
-                        if (val != null) mat.Properties.Set(kv.Key, val);
-                    }
-                }
+                if (root["properties"] is JsonObject props)
+                    mat.Properties.LoadFromJson(props);
+                else
+                    MigrateLegacy(root, mat);
             }
             catch (Exception ex)
-            {
-                Console.WriteLine($"[MaterialAsset] Load failed '{filePath}': {ex.Message}");
-            }
+            { Console.WriteLine($"[MaterialAsset] Load failed {filePath}: {ex.Message}"); }
             return mat;
         }
 
-        public void Save(string filePath)
+        private static void MigrateLegacy(JsonNode root, MaterialAsset mat)
         {
-            var root = new JsonObject
+            if (root["albedo"] is JsonArray a && a.Count >= 3)
+                mat.Properties.Set("_Color", new Vector4(
+                    a[0]?.GetValue<float>() ?? 1f, a[1]?.GetValue<float>() ?? 1f,
+                    a[2]?.GetValue<float>() ?? 1f,
+                    a.Count >= 4 ? a[3]?.GetValue<float>() ?? 1f : 1f));
+            if (root["metallic"] is JsonValue mv) mat.Properties.Set("_Metallic", mv.GetValue<float>());
+            if (root["roughness"] is JsonValue rv) mat.Properties.Set("_Roughness", rv.GetValue<float>());
+            if (root["emission"] is JsonArray ea && ea.Count >= 3)
+                mat.Properties.Set("_EmissionColor", new Vector4(
+                    ea[0]?.GetValue<float>() ?? 0f, ea[1]?.GetValue<float>() ?? 0f,
+                    ea[2]?.GetValue<float>() ?? 0f, 1f));
+        }
+
+        // ── Save ──────────────────────────────────────────────────────────────
+        public void Save(string? path = null)
+        {
+            path ??= FilePath ?? throw new InvalidOperationException("No file path.");
+            FilePath = path;
+            var o = new JsonObject
             {
                 ["shader"] = ShaderPath,
-                ["properties"] = BuildPropsNode(),
+                ["properties"] = Properties.ToJson(),
             };
-            string dir = Path.GetDirectoryName(filePath)!;
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            File.WriteAllText(filePath, root.ToJsonString(_opts));
+            File.WriteAllText(path, o.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }
 
-        private JsonObject BuildPropsNode()
+        // ── ParseShaderProperties ─────────────────────────────────────────────
+        //  InspectorPanel calls:
+        //    asset.DeclaredProperties.AddRange(Core.MaterialAsset.ParseShaderProperties(src));
+        //
+        //  Parses Properties { } block from .shader source.
+        //  Supported lines:
+        //    _Name ("Display", Float)        = 0.0
+        //    _Name ("Display", Int)          = 0
+        //    _Name ("Display", Range(0,1))   = 0.5
+        //    _Name ("Display", Color)        = (1,1,1,1)
+        //    _Name ("Display", Vector)       = (0,0,0,0)
+        //    _Name ("Display", 2D)           = "white"
+        public static List<ShaderPropDecl> ParseShaderProperties(string src)
         {
-            var obj = new JsonObject();
-            foreach (var (k, v) in Properties.All())
-            {
-                var node = ValueToNode(v);
-                if (node != null) obj[k] = node;
-            }
-            return obj;
-        }
+            var result = new List<ShaderPropDecl>();
+            var blockM = Regex.Match(src, @"Properties\s*\{([^}]*)\}", RegexOptions.Singleline);
+            if (!blockM.Success) return result;
 
-        private static object? NodeToValue(JsonNode? node)
-        {
-            if (node == null) return null;
-            if (node is JsonArray arr && arr.Count == 4)
-                return new Vector4(arr[0]!.GetValue<float>(), arr[1]!.GetValue<float>(),
-                                   arr[2]!.GetValue<float>(), arr[3]!.GetValue<float>());
-            if (node is JsonValue jv)
-            {
-                if (jv.TryGetValue(out float f)) return f;
-                if (jv.TryGetValue(out int i)) return i;
-                if (jv.TryGetValue(out double d)) return (float)d;
-                if (jv.TryGetValue(out string s)) return s;
-            }
-            return null;
-        }
+            var lineRx = new Regex(@"(\w+)\s*\(\s*""([^""]*)""\s*,\s*([^)]+)\)\s*=\s*(.+)", RegexOptions.IgnoreCase);
+            var rangeRx = new Regex(@"Range\s*\(\s*([\d.\-]+)\s*,\s*([\d.\-]+)\s*\)", RegexOptions.IgnoreCase);
+            var vecRx = new Regex(@"\(\s*([\d.\-]+)\s*,\s*([\d.\-]+)\s*,\s*([\d.\-]+)\s*(?:,\s*([\d.\-]+))?\s*\)");
 
-        private static JsonNode? ValueToNode(object? val) => val switch
-        {
-            float f => JsonValue.Create(f),
-            int i => JsonValue.Create(i),
-            string s => JsonValue.Create(s),
-            Vector4 v => new JsonArray(v.X, v.Y, v.Z, v.W),
-            _ => null,
-        };
-
-        // ── Shader property parser ─────────────────────────────────────────────
-        /// <summary>
-        /// Parses the Properties { } block from a .shader source file.
-        ///
-        /// Syntax (Unity-compatible):
-        ///   _Name ("Display Name", Type) = DefaultValue
-        ///
-        /// Supported types:
-        ///   Float, Int, Range(min,max), Color, Vector, 2D
-        /// </summary>
-        public static List<ShaderProperty> ParseShaderProperties(string shaderSource)
-        {
-            var result = new List<ShaderProperty>();
-            int start = shaderSource.IndexOf("Properties", StringComparison.OrdinalIgnoreCase);
-            if (start < 0) return result;
-            int brace = shaderSource.IndexOf('{', start);
-            if (brace < 0) return result;
-            int depth = 1, end = brace + 1;
-            while (end < shaderSource.Length && depth > 0)
+            foreach (var raw in blockM.Groups[1].Value.Split('\n'))
             {
-                if (shaderSource[end] == '{') depth++;
-                else if (shaderSource[end] == '}') depth--;
-                end++;
-            }
-            string block = shaderSource[(brace + 1)..(end - 1)];
+                var line = raw.Trim();
+                if (string.IsNullOrEmpty(line) || line.StartsWith("//")) continue;
+                var m = lineRx.Match(line);
+                if (!m.Success) continue;
 
-            foreach (var rawLine in block.Split('\n'))
-            {
-                var line = rawLine.Trim();
-                if (line.Length == 0 || line.StartsWith("//")) continue;
-                var prop = ParsePropertyLine(line);
-                if (prop != null) result.Add(prop);
+                string uname = m.Groups[1].Value.Trim();
+                string dname = m.Groups[2].Value.Trim();
+                string tExpr = m.Groups[3].Value.Trim();
+                string dExpr = m.Groups[4].Value.Trim().Trim('"');
+
+                float rMin = 0f, rMax = 1f;
+                ShaderPropType ptype;
+                var rangeM = rangeRx.Match(tExpr);
+                if (rangeM.Success)
+                {
+                    ptype = ShaderPropType.Range;
+                    TryF(rangeM.Groups[1].Value, out rMin);
+                    TryF(rangeM.Groups[2].Value, out rMax);
+                }
+                else ptype = tExpr.ToLowerInvariant() switch
+                {
+                    "float" => ShaderPropType.Float,
+                    "int" => ShaderPropType.Int,
+                    "color" => ShaderPropType.Color,
+                    "vector" => ShaderPropType.Vector,
+                    "2d" or "texture" or "sampler2d" => ShaderPropType.Texture2D,
+                    _ => ShaderPropType.Float,
+                };
+
+                object? def = ParseDef(dExpr, ptype, vecRx);
+                result.Add(new ShaderPropDecl
+                {
+                    Name = uname,
+                    DisplayName = dname,
+                    Type = ptype,
+                    DefaultValue = def,
+                    Min = rMin,
+                    Max = rMax,
+                });
             }
             return result;
         }
 
-        private static ShaderProperty? ParsePropertyLine(string line)
+        private static object? ParseDef(string expr, ShaderPropType t, Regex vecRx)
         {
-            // _Name ("Display Name", Type) = DefaultValue
-            int paren = line.IndexOf('(');
-            if (paren < 0) return null;
-            string name = line[..paren].Trim();
-            if (!name.StartsWith("_") && !char.IsLetter(name[0])) return null;
-
-            int close = line.IndexOf(')', paren);
-            if (close < 0) return null;
-            string inner = line[(paren + 1)..close];
-
-            // Split display name and type
-            int lastComma = inner.LastIndexOf(',');
-            if (lastComma < 0) return null;
-            string dispName = inner[..lastComma].Trim().Trim('"', '\'', ' ');
-            string typePart = inner[(lastComma + 1)..].Trim();
-
-            // Default value after '='
-            object? defVal = null;
-            int eq = line.IndexOf('=', close);
-            if (eq >= 0)
+            switch (t)
             {
-                string defStr = line[(eq + 1)..].Trim();
-                defVal = ParseDefaultValue(defStr);
-            }
-
-            var prop = new ShaderProperty
-            {
-                Name = name,
-                DisplayName = string.IsNullOrEmpty(dispName) ? name : dispName,
-                DefaultValue = defVal,
-            };
-
-            if (typePart.StartsWith("Range", StringComparison.OrdinalIgnoreCase))
-            {
-                prop.Type = ShaderPropType.Range;
-                var rp = typePart.IndexOf('(');
-                var rc = typePart.IndexOf(')');
-                if (rp >= 0 && rc > rp)
-                {
-                    var parts = typePart[(rp + 1)..rc].Split(',');
-                    if (parts.Length >= 2)
+                case ShaderPropType.Float:
+                case ShaderPropType.Int:
+                case ShaderPropType.Range:
+                    return TryF(expr, out float f) ? f : 0f;
+                case ShaderPropType.Color:
+                case ShaderPropType.Vector:
+                    var vm = vecRx.Match(expr);
+                    if (vm.Success)
                     {
-                        // Can't pass properties as out parameters; parse into locals and assign.
-                        float minVal = prop.Min;
-                        float maxVal = prop.Max;
-                        float.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Float,
-                            System.Globalization.CultureInfo.InvariantCulture, out minVal);
-                        float.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float,
-                            System.Globalization.CultureInfo.InvariantCulture, out maxVal);
-                        prop.Min = minVal;
-                        prop.Max = maxVal;
+                        TryF(vm.Groups[1].Value, out float x); TryF(vm.Groups[2].Value, out float y);
+                        TryF(vm.Groups[3].Value, out float z);
+                        float w = 1f; if (vm.Groups[4].Success) TryF(vm.Groups[4].Value, out w);
+                        return new Vector4(x, y, z, w);
                     }
-                } 
-                prop.DefaultValue ??= prop.Min;
+                    return t == ShaderPropType.Color ? new Vector4(1, 1, 1, 1) : Vector4.Zero;
+                case ShaderPropType.Texture2D:
+                    return expr.Trim('"');
+                default: return null;
             }
-            else if (typePart.Equals("Float", StringComparison.OrdinalIgnoreCase))
-                prop.Type = ShaderPropType.Float;
-            else if (typePart.Equals("Int", StringComparison.OrdinalIgnoreCase))
-                prop.Type = ShaderPropType.Int;
-            else if (typePart.Equals("Color", StringComparison.OrdinalIgnoreCase))
-                prop.Type = ShaderPropType.Color;
-            else if (typePart.Equals("Vector", StringComparison.OrdinalIgnoreCase))
-                prop.Type = ShaderPropType.Vector;
-            else if (typePart.Equals("2D", StringComparison.OrdinalIgnoreCase)
-                  || typePart.StartsWith("Texture", StringComparison.OrdinalIgnoreCase))
-                prop.Type = ShaderPropType.Texture2D;
-            else return null;
-
-            return prop;
         }
 
-        private static object? ParseDefaultValue(string s)
+        private static bool TryF(string s, out float v) =>
+            float.TryParse(s.Trim(), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out v);
+
+        // ── Standard shader built-in properties ───────────────────────────────
+        // Used as fallback when shader is "Standard" or the file doesn't exist.
+        public static readonly List<ShaderPropDecl> StandardProperties = new()
         {
-            // Color/Vector: (r, g, b, a)
-            if (s.StartsWith("("))
-            {
-                var inner = s.Trim('(', ')');
-                var parts = inner.Split(',');
-                if (parts.Length == 4)
-                {
-                    float[] vals = new float[4];
-                    bool ok = true;
-                    for (int i = 0; i < 4; i++)
-                        if (!float.TryParse(parts[i].Trim(),
-                            System.Globalization.NumberStyles.Float,
-                            System.Globalization.CultureInfo.InvariantCulture, out vals[i]))
-                        { ok = false; break; }
-                    if (ok) return new Vector4(vals[0], vals[1], vals[2], vals[3]);
-                }
-            }
-            // Texture default: "white" etc.
-            if (s.StartsWith("\"")) return s.Trim('"');
-            // Number
-            if (float.TryParse(s, System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture, out float fv))
-                return fv;
-            return null;
-        }
+            new(){ Name="_MainTex",       DisplayName="Albedo (RGB)",   Type=ShaderPropType.Texture2D, DefaultValue="white"              },
+            new(){ Name="_Color",         DisplayName="Tint Color",     Type=ShaderPropType.Color,     DefaultValue=new Vector4(1,1,1,1) },
+            new(){ Name="_Metallic",      DisplayName="Metallic",       Type=ShaderPropType.Range,     DefaultValue=0f,   Min=0f,Max=1f  },
+            new(){ Name="_Roughness",     DisplayName="Roughness",      Type=ShaderPropType.Range,     DefaultValue=0.5f, Min=0f,Max=1f  },
+            new(){ Name="_EmissionColor", DisplayName="Emission Color", Type=ShaderPropType.Color,     DefaultValue=new Vector4(0,0,0,1) },
+            new(){ Name="_NormalMap",     DisplayName="Normal Map",     Type=ShaderPropType.Texture2D, DefaultValue="bump"              },
+        };
+
+
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    //  MaterialCache — keeps loaded MaterialAssets alive (engine-wide)
+    //  MaterialCache
+    //
+    //  Static load-and-cache layer.  InspectorPanel calls:
+    //    MaterialCache.Get(path)        — returns loaded+populated MaterialAsset
+    //    MaterialCache.Invalidate(path) — evict so next Get() reloads from disk
     // ═══════════════════════════════════════════════════════════════════════════
     public static class MaterialCache
     {
-        private static readonly Dictionary<string, MaterialAsset> _cache = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, MaterialAsset> _cache =
+            new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>
+        /// Returns the live MaterialAsset for this path, loading it on first call.
+        /// The inspector and renderer both get the SAME object — property changes
+        /// the inspector makes are visible to the renderer on the next frame with
+        /// no invalidation or disk round-trip needed.
+        /// </summary>
         public static MaterialAsset Get(string filePath)
         {
-            if (_cache.TryGetValue(filePath, out var existing)) return existing;
-            var mat = MaterialAsset.Load(filePath);
-            _cache[filePath] = mat;
-            return mat;
+            if (_cache.TryGetValue(filePath, out var hit)) return hit;
+            var asset = MaterialAsset.Load(filePath);
+            if (asset.DeclaredProperties.Count == 0)
+                PopulateDecls(asset);
+            _cache[filePath] = asset;
+            return asset;
         }
 
-        public static void Invalidate(string filePath) => _cache.Remove(filePath);
-        public static void Clear() => _cache.Clear();
+        /// <summary>
+        /// Called when the shader file or the .mat file itself has changed on disk
+        /// (e.g. user picked a new shader). Reloads DeclaredProperties from disk
+        /// while preserving any in-memory property values the user has set.
+        /// The same object reference is kept so the renderer doesn't miss it.
+        /// </summary>
+        public static void Invalidate(string filePath)
+        {
+            if (_cache.TryGetValue(filePath, out var existing))
+            {
+                // Reload the file to get updated ShaderPath / property defaults
+                var fresh = MaterialAsset.Load(filePath);
+
+                // Merge: keep existing in-memory property values (user edits),
+                // but update ShaderPath and repopulate DeclaredProperties.
+                existing.ShaderPath = fresh.ShaderPath;
+                existing.DeclaredProperties.Clear();
+                PopulateDecls(existing);
+
+                // Evict textures so they reload from disk on next bind
+                Material.ClearTextureCache();
+            }
+            else
+            {
+                // Not cached yet — nothing to do, Get() will load fresh.
+                Material.ClearTextureCache();
+            }
+        }
+
+        /// <summary>Clears the entire cache (call on project reload).</summary>
+        public static void Clear()
+        {
+            _cache.Clear();
+            Material.ClearTextureCache();
+        }
+
+        private static void PopulateDecls(MaterialAsset asset)
+        {
+            bool useStandard =
+                string.IsNullOrEmpty(asset.ShaderPath) ||
+                asset.ShaderPath.Equals("Standard", StringComparison.OrdinalIgnoreCase) ||
+                !File.Exists(asset.ShaderPath);
+
+            if (useStandard)
+            {
+                asset.DeclaredProperties.AddRange(MaterialAsset.StandardProperties);
+                return;
+            }
+
+            try
+            {
+                string src = File.ReadAllText(asset.ShaderPath);
+                var props = MaterialAsset.ParseShaderProperties(src);
+                asset.DeclaredProperties.AddRange(
+                    props.Count > 0 ? props : MaterialAsset.StandardProperties);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[MaterialCache] Shader read error: {ex.Message}");
+                asset.DeclaredProperties.AddRange(MaterialAsset.StandardProperties);
+            }
+        }
     }
 }

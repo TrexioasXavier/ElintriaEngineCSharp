@@ -446,6 +446,13 @@ namespace ElintriaEngine.Core
 
         public static void Register(string name, Type type) => _map[name] = type;
 
+        /// <summary>
+        /// Returns true if the type name belongs to a built-in engine component
+        /// (i.e. it was in the registry at startup, before any user scripts loaded).
+        /// User scripts return false and must be serialized as DynamicScript.
+        /// </summary>
+        public static bool IsBuiltIn(string name) => _map.ContainsKey(name);
+
         /// <summary>Returns the Type for a registered component name, or null if not found.</summary>
         public static Type? TryGetType(string name)
         {

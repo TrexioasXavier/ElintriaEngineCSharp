@@ -223,10 +223,10 @@ namespace ElintriaEngine.Rendering.Scene
 
         // ── Draw one GameObject ───────────────────────────────────────────────
         private void DrawGameObject(
-            GameObject go, Matrix4 view, Matrix4 proj, Vector3 camPos,
-            List<Core.DirectionalLight> dirLights,
-            List<Core.SpotLight> spotLights,
-            float ambient, bool editorFakeLight)
+    GameObject go, Matrix4 view, Matrix4 proj, Vector3 camPos,
+    List<Core.DirectionalLight> dirLights,
+    List<Core.SpotLight> spotLights,
+    float ambient, bool editorFakeLight)
         {
             if (!go.ActiveSelf) return;
             var scale = go.Transform.LocalScale;
@@ -245,7 +245,6 @@ namespace ElintriaEngine.Rendering.Scene
             var normalMat = MathF.Abs(m3.Determinant) > 1e-6f
                 ? Matrix3.Invert(Matrix3.Transpose(m3)) : Matrix3.Identity;
 
-            // ── Material / shader selection ───────────────────────────────────
             var mr = go.GetComponent<Core.MeshRenderer>();
             string matPath = mr?.MaterialPath ?? "";
 
@@ -259,29 +258,35 @@ namespace ElintriaEngine.Rendering.Scene
                 if (matAsset != null)
                 {
                     var compiledMat = LoadOrGetCompiledMaterial(matPath, matAsset);
-                    if (compiledMat != null) { activeMat = compiledMat; activeShader = compiledMat.Shader; }
+                    if (compiledMat != null)
+                    {
+                        activeMat = compiledMat;
+                        activeShader = compiledMat.Shader;
+                    }
                 }
             }
 
-            // Bind material (uses asset properties if present, standard uniforms otherwise)
-            if (matAsset != null && matAsset.DeclaredProperties.Count > 0)
+            // ── Bind shader + material properties ────────────────────────────────
+            // BindFromAsset reads the live MaterialAsset.Properties object directly —
+            // whatever the inspector last wrote is what gets sent to the shader.
+            if (matAsset != null)
                 activeMat.BindFromAsset(matAsset);
             else
                 activeMat.Bind();
 
             int prog = activeShader.Program;
 
+            // ── Matrices ──────────────────────────────────────────────────────────
             activeShader.SetMat4("uModel", ref model);
             activeShader.SetMat4("uView", ref view);
             activeShader.SetMat4("uProjection", ref proj);
             GL.UniformMatrix3(GL.GetUniformLocation(prog, "uNormalMat"), false, ref normalMat);
-            // Try setting common uniforms (silently ignored if not in custom shader)
+
+            // ── Scene uniforms ────────────────────────────────────────────────────
             TrySetUniform(prog, "uCamPos", camPos);
             TrySetUniform(prog, "uAmbient", ambient);
-            TrySetUniform(prog, "uMetallic", mr?.Metallic ?? 0f);
-            TrySetUniform(prog, "uRoughness", mr?.Roughness ?? 0.5f);
 
-            // Directional lights
+            // ── Directional lights ────────────────────────────────────────────────
             int dirCount = editorFakeLight ? 1 : Math.Min(dirLights.Count, 4);
             GL.Uniform1(GL.GetUniformLocation(prog, "uDirCount"), dirCount);
             if (editorFakeLight)
@@ -303,7 +308,7 @@ namespace ElintriaEngine.Rendering.Scene
                 }
             }
 
-            // Spot lights
+            // ── Spot lights ───────────────────────────────────────────────────────
             int spotCount = Math.Min(spotLights.Count, 8);
             GL.Uniform1(GL.GetUniformLocation(prog, "uSpotCount"), spotCount);
             for (int i = 0; i < spotCount; i++)
@@ -311,7 +316,8 @@ namespace ElintriaEngine.Rendering.Scene
                 var s = spotLights[i];
                 var pos = s.Position;
                 var dir = s.Direction;
-                float inner = MathF.Cos(MathHelper.DegreesToRadians(s.SpotAngle * (1f - s.BlendFraction)));
+                float innerDeg = s.SpotAngle * (1f - Math.Clamp(s.BlendFraction, 0f, 0.99f));
+                float inner = MathF.Cos(MathHelper.DegreesToRadians(innerDeg));
                 float outer = MathF.Cos(MathHelper.DegreesToRadians(s.SpotAngle));
                 GL.Uniform3(GL.GetUniformLocation(prog, $"uSpotPos[{i}]"), pos.X, pos.Y, pos.Z);
                 GL.Uniform3(GL.GetUniformLocation(prog, $"uSpotDir[{i}]"), dir.X, dir.Y, dir.Z);
@@ -322,50 +328,64 @@ namespace ElintriaEngine.Rendering.Scene
                 GL.Uniform1(GL.GetUniformLocation(prog, $"uSpotCosOuter[{i}]"), outer);
             }
 
-            // Only override color if no custom material provided it via _Color property
-            if (matAsset == null || !matAsset.Properties.Has("_Color"))
+            // ── Raw albedo fallback — no .mat assigned ────────────────────────────
+            if (matAsset == null && mr != null)
             {
-                TrySetUniform(prog, "uColor", mr != null
-                    ? new Vector4(mr.AlbedoR, mr.AlbedoG, mr.AlbedoB, 1f)
-                    : new Vector4(0.8f, 0.82f, 0.85f, 1f));
+                TrySetUniform(prog, "_Color", new Vector4(mr.AlbedoR, mr.AlbedoG, mr.AlbedoB, 1f));
+                TrySetUniform(prog, "_Metallic", mr.Metallic);
+                TrySetUniform(prog, "_Roughness", mr.Roughness);
             }
 
             mesh.Draw();
         }
 
+
         // ── Material asset caches ─────────────────────────────────────────────
         private readonly Dictionary<string, Core.MaterialAsset> _matAssetCache = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, Material> _compiledMatCache = new(StringComparer.OrdinalIgnoreCase);
+        // Tracks the last-write time of each .shader file so we recompile when it changes on disk.
+        private readonly Dictionary<string, DateTime> _shaderFileTimestamps = new(StringComparer.OrdinalIgnoreCase);
 
         private Core.MaterialAsset? LoadOrGetMaterialAsset(string matPath)
         {
-            if (!_matAssetCache.TryGetValue(matPath, out var asset))
-            {
-                asset = Core.MaterialAsset.Load(matPath);
-                // Load declared properties from the referenced shader
-                if (!string.IsNullOrEmpty(asset.ShaderPath))
-                {
-                    string src = LoadShaderSource(asset.ShaderPath);
-                    if (!string.IsNullOrEmpty(src))
-                        asset.DeclaredProperties.AddRange(Core.MaterialAsset.ParseShaderProperties(src));
-                }
-                _matAssetCache[matPath] = asset;
-            }
-            return asset;
+            // MaterialCache.Get() loads + populates DeclaredProperties on first call,
+            // then returns the same live object every subsequent call.
+            // The inspector modifies that object's Properties directly, so changes are
+            // visible here on the very next frame without any invalidation needed.
+            return Core.MaterialCache.Get(matPath);
         }
 
         private Material? LoadOrGetCompiledMaterial(string matPath, Core.MaterialAsset asset)
         {
+            // Check if the .shader file has changed on disk since last compile.
+            // This means saving Main.shader takes effect immediately without restart.
+            string shaderPath = asset.ShaderPath ?? "";
+            if (!string.IsNullOrEmpty(shaderPath) && System.IO.File.Exists(shaderPath))
+            {
+                var diskTime = System.IO.File.GetLastWriteTimeUtc(shaderPath);
+                bool stale = !_shaderFileTimestamps.TryGetValue(shaderPath, out var cachedTime)
+                             || diskTime != cachedTime;
+                if (stale && _compiledMatCache.ContainsKey(matPath))
+                {
+                    // Shader file changed — evict the old compiled material
+                    _compiledMatCache[matPath].Dispose();
+                    _compiledMatCache.Remove(matPath);
+                    Console.WriteLine($"[SceneRenderer] Shader changed on disk, recompiling: {System.IO.Path.GetFileName(shaderPath)}");
+                }
+            }
+
             if (_compiledMatCache.TryGetValue(matPath, out var existing)) return existing;
             try
             {
-                string src = LoadShaderSource(asset.ShaderPath);
+                string src = LoadShaderSource(shaderPath);
                 if (string.IsNullOrEmpty(src)) return null;
                 var (vert, frag) = SplitShaderSource(src);
                 if (string.IsNullOrEmpty(vert) || string.IsNullOrEmpty(frag)) return null;
                 var sh = SceneShader.Compile(vert, frag);
                 var mat = new Material(sh) { Name = System.IO.Path.GetFileNameWithoutExtension(matPath) };
                 _compiledMatCache[matPath] = mat;
+                if (!string.IsNullOrEmpty(shaderPath) && System.IO.File.Exists(shaderPath))
+                    _shaderFileTimestamps[shaderPath] = System.IO.File.GetLastWriteTimeUtc(shaderPath);
                 Console.WriteLine($"[SceneRenderer] Compiled shader for '{System.IO.Path.GetFileName(matPath)}'");
                 return mat;
             }
@@ -378,8 +398,21 @@ namespace ElintriaEngine.Rendering.Scene
 
         public void InvalidateMaterial(string matPath)
         {
-            _matAssetCache.Remove(matPath);
-            if (_compiledMatCache.TryGetValue(matPath, out var old)) { old.Dispose(); _compiledMatCache.Remove(matPath); }
+            // Evict from the shared MaterialCache so it reloads shader decls from disk
+            Core.MaterialCache.Invalidate(matPath);
+
+            // Dispose and evict any compiled GPU shader for this material
+            if (_compiledMatCache.TryGetValue(matPath, out var old))
+            {
+                old.Dispose();
+                _compiledMatCache.Remove(matPath);
+            }
+
+            // Evict the shader timestamp so the next compile re-reads from disk
+            _shaderFileTimestamps.Remove(Core.MaterialCache.Get(matPath)?.ShaderPath ?? "");
+
+            // Clear the static texture cache so reassigned textures reload from disk
+            Material.ClearTextureCache();
         }
 
         private string LoadShaderSource(string shaderPathOrName)
